@@ -1,0 +1,77 @@
+[project]
+name = "wavediffusion"
+version = "0.0.1"
+description = "A minimal but functional implementation of diffusion model training and sampling for sea state sampling"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Jiarong Wu", email = "jiarong.wu@nyu.edu" }
+]
+maintainers = [
+  {name = "Jiarong Wu", email = "jiarong.wu@nyu.edu" }
+]
+
+classifiers = [
+  # How mature is this project? Common values are
+  #   3 - Alpha
+  #   4 - Beta
+  #   5 - Production/Stable
+  "Development Status :: 3 - Beta",
+
+  # Pick your license as you wish
+  "License :: OSI Approved :: MIT License",
+
+  # Specify the Python versions you support here. In particular, ensure
+  # that you indicate you support Python 3. These classifiers are *not*
+  # checked by "pip install". See instead "python_requires" below.
+  "Programming Language :: Python :: 3",
+
+  "Operating System :: OS Independent",
+]
+
+dependencies = [
+  "accelerate",
+  "numpy",
+  "torchvision",
+  "torch",
+  "tqdm",
+  "einops",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yuanchenyang/smalldiffusion"
+"Bug Tracker" = "https://github.com/yuanchenyang/smalldiffusion/issues"
+"Documentation" = "https://github.com/yuanchenyang/smalldiffusion"
+"Source" = "https://github.com/yuanchenyang/smalldiffusion"
+
+[project.optional-dependencies] # Optional
+dev = ["build", "twine"]
+test = ["pytest", "diffusers==0.32.1"]
+examples = [
+  "einops",
+  "diffusers",
+  "transformers",
+  "datasets",
+  "jupyter",
+  "matplotlib",
+  "torch-ema",
+]
+
+[build-system]
+requires = ["setuptools>=62"]
+build-backend = "setuptools.build_meta"
+
+# Had to add this for pip install -e . (Jiarong Wu)
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+# Had to add this for pip install -e . (Jiarong Wu)
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "run_slow: mark tests as slow, skip unless --run_slow flag is passed",
+    "serial",
+]
