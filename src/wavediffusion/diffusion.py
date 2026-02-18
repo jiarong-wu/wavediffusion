@@ -115,6 +115,41 @@ def training_loop(loader      : DataLoader,
             optimizer.step()
 
 ### Work with dataloader that will return a mask
+# def masked_training_loop(loader      : DataLoader,
+#                   model       : nn.Module,
+#                   schedule    : Schedule,
+#                   accelerator : Optional[Accelerator] = None,
+#                   epochs      : int = 10000,
+#                   lr          : float = 1e-3,
+#                   conditional : bool = True,
+#                   start_epoch : int = 0):
+#     accelerator = accelerator or Accelerator()
+#     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+#     model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
+#     global_step = 0
+#     for epoch in (pbar := tqdm(range(start_epoch+1, start_epoch+epochs+1))):
+#         for x, f, mask in loader:
+#             model.train()
+#             optimizer.zero_grad()
+#             x0 = [x, f] # Concatenate inputs and conditions
+#             x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
+#             # Add mask to noise if provided (mask shape: (1, 1, H, W))
+#             if mask is not None:
+#                 mask.to(eps.device)
+#                 eps = eps * mask
+#                 loss = accelerator.unwrap_model(model).get_loss_masked(x0, sigma, eps, mask=mask, cond=cond)
+#             else:
+#                 # Chatgpt suggusted this change accelerator.unwrap_model(model) and it worked
+#                 loss = accelerator.unwrap_model(model).get_loss(x0, sigma, eps, cond=cond)
+#                 # loss = model.get_loss(x0, sigma, eps, cond=cond)               
+#             accelerator.backward(loss)
+#             optimizer.step()
+#             yield SimpleNamespace(
+#                 loss=loss.detach(), step=global_step, epoch=epoch, pbar=pbar,
+#             )
+#             global_step += 1  
+
+# New training loop with gradient accumulation            
 def masked_training_loop(loader      : DataLoader,
                   model       : nn.Module,
                   schedule    : Schedule,
@@ -122,33 +157,40 @@ def masked_training_loop(loader      : DataLoader,
                   epochs      : int = 10000,
                   lr          : float = 1e-3,
                   conditional : bool = True,
-                  start_epoch : int = 0):
+                  start_epoch : int = 0,
+                  grad_accum_steps : int = 4):
     accelerator = accelerator or Accelerator()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
     global_step = 0
     for epoch in (pbar := tqdm(range(start_epoch+1, start_epoch+epochs+1))):
-        for x, f, mask in loader:
+        for step_idx, (x, f, mask) in enumerate(loader):
             model.train()
-            optimizer.zero_grad()
-            x0 = [x, f] # Concatenate inputs and conditions
+            x0 = [x, f]
             x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
-            # Add mask to noise if provided (mask shape: (1, 1, H, W))
-            if mask is not None:
-                mask.to(eps.device)
-                eps = eps * mask
-                loss = accelerator.unwrap_model(model).get_loss_masked(x0, sigma, eps, mask=mask, cond=cond)
-            else:
-                # Chatgpt suggusted this change accelerator.unwrap_model(model) and it worked
-                loss = accelerator.unwrap_model(model).get_loss(x0, sigma, eps, cond=cond)
-                # loss = model.get_loss(x0, sigma, eps, cond=cond)               
-            accelerator.backward(loss)
-            optimizer.step()
+
+            # Use accelerator.accumulate() to handle gradient accumulation automatically
+            with accelerator.accumulate(model):
+                if mask is not None:
+                    mask = mask.to(eps.device)
+                    eps = eps * mask
+                    loss = accelerator.unwrap_model(model).get_loss_masked(
+                        x0, sigma, eps, mask=mask, cond=cond
+                    )
+                else:
+                    loss = accelerator.unwrap_model(model).get_loss(
+                        x0, sigma, eps, cond=cond
+                    )
+
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+
             yield SimpleNamespace(
                 loss=loss.detach(), step=global_step, epoch=epoch, pbar=pbar,
             )
-            global_step += 1            
-
+            global_step += 1 # Notice that this step is for micro-steps, not actual optimizer steps, which is handled by accelerator.accumulate()
+                      
             
 
 # Generalizes most commonly-used samplers:

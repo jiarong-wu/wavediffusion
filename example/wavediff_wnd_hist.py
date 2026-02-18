@@ -20,7 +20,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
          ckpt_everyn_epoch=1, sample_everyn_epoch=1, eval_everyn_step=100):
     # Setup
     print(torch.cuda.is_available())
-    a = Accelerator(mixed_precision="fp16") 
+    a = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=4)
     print(a.state)
     
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/train_global/'
@@ -112,8 +112,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
             log_file.write(f"{ns.step}, {ns.loss.item():.6f}\n")
             log_file.flush()
             ns.pbar.set_description(f"Loss={ns.loss.item():.5f}")        
-            
-        ema.update()
+        if a.sync_gradients:    
+            ema.update()
 
         # ---- evaluation ----
         if ns.step % eval_everyn_step == 0. and ns.step > 0:
