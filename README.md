@@ -6,7 +6,7 @@
 [![Pypi project][pypi-img]][pypi-url]
 [![Build Status][build-img]][build-url]
 
-A lightweight diffusion model adopted from [blog-url] for sea state estimation. Below are the original README.
+A lightweight diffusion model adopted from [blog-url] for sea state estimation. Below are the original README. Install locally in editable mode using `make install-local`.
 
 A lightweight diffusion library for training and sampling from diffusion
 models. It is built for easy experimentation when training new models and
