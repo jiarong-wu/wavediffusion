@@ -382,3 +382,72 @@ class npyDataWndHist(npyDataResized):
         mask = f[[2],:,:]
         
         return x, f, mask
+    
+    
+class npyDataWndHistDaily(npyDataResized):
+    def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month
+        landmaskname=None, use_icymask=True,
+        compute_stats=True,
+        meanx=None, stdx=None, meanf=None, stdf=None,
+        resize_x=None, resize_f=None):
+        super().__init__(
+            file_list, landmaskname, use_icymask,
+            compute_stats, meanx, stdx, meanf, stdf,)
+        # Master class initiation ...
+        # Expand scaling for wind history (add 2 more channels)
+        for i in range(0,10):
+            self.meanf = torch.cat([self.meanf, self.meanf[0:2]], dim=0)
+        for i in range(0,10):
+            self.stdf = torch.cat([self.stdf, self.stdf[0:2]], dim=0)
+        
+        self.tf_x = tf.Compose([
+            FillNaN(0.0),
+            tf.Resize(resize_x),
+            tf.Normalize(self.meanx.tolist(), self.stdx.tolist()),
+            Mask(self.landmask_resized)
+        ])
+        self.tf_f = tf.Compose([
+            FillNaN(0.0),
+            tf.Resize(resize_f),
+            tf.Normalize(self.meanf.tolist(), self.stdf.tolist()),
+            Mask(self.landmask_resized)
+        ])
+        # Inverse transforms
+        self.inv_tf_x = tf.Compose([
+            tf.Resize((self.original_H, self.original_W)),
+            tf.Normalize(mean=[0]*len(self.meanx), std=(1/self.stdx).tolist()),
+            tf.Normalize(mean=(-self.meanx).tolist(), std=[1]*len(self.stdx)),
+            Mask(self.landmask_original)
+        ])
+        self.inv_tf_f = tf.Compose([
+            tf.Resize((self.original_H, self.original_W)),
+            tf.Normalize(mean=[0]*len(self.meanf), std=(1/self.stdf).tolist()),
+            tf.Normalize(mean=(-self.meanf).tolist(), std=[1]*len(self.stdf)),
+            Mask(self.landmask_original)
+        ])
+    
+    def __len__(self):
+        return self.total_length - 40
+    
+    def __getitem__(self, idx):
+        """Get item by global index - automatically finds correct file."""
+        # Map global index to file and local index
+        file_idx, local_idx = self._get_file_and_local_idx(idx + 40)
+        # Load from the appropriate file
+        x = self.X_files[file_idx][local_idx].copy()
+        x[0] = np.log1p(x[0])
+        x = torch.from_numpy(x).float()
+        f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+        for i in range(4, 44, 4):
+            file_idx_hist, local_idx_hist = self._get_file_and_local_idx(idx + i)
+            f_hist = torch.from_numpy(self.F_files[file_idx_hist][local_idx_hist]).float()
+            f = torch.cat([f, f_hist[[0,1], :, :]], dim=0)  # Append historical wind speed and direction
+        
+        # Apply transforms
+        x = self.tf_x(x)
+        f = self.tf_f(f)
+        mask = f[[2],:,:]
+        
+        return x, f, mask
+    
+

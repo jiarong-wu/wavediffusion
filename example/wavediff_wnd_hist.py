@@ -17,10 +17,10 @@ from wavediffusion.waveutils import evaluate, sample_and_save
 
 ### TODO: refine this to reuse mean and std stats from model reload. And multi-GPU case for computing dataset stats
 def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=False, weights_file=None,
-         ckpt_everyn_epoch=1, sample_everyn_epoch=1, eval_everyn_step=100):
+         ckpt_everyn_epoch=1, sample_everyn_epoch=1, eval_everyn_step=100, gradient_accumulation_steps=4):
     # Setup
     print(torch.cuda.is_available())
-    a = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=4)
+    a = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=gradient_accumulation_steps)
     print(a.state)
     
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/train_global/'
@@ -159,6 +159,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
 if __name__=='__main__':
     
     path = '/global/homes/j/jiarongw/scratch_folder/log1p/hist1/'
-    # main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1)    
+    # main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
+    #      gradient_accumulation_steps=4)    
     main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_6.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1)
+         weights_file=path+'ckpt_12.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
