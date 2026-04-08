@@ -8,11 +8,17 @@ from torch_ema import ExponentialMovingAverage as EMA
 from torchvision import transforms as tf
 import torch.distributed as dist
 
-from wavediffusion.plain_unet import plainUnet, masked_training_loop_plain, evaluate_plain
-from wavediffusion.wavedata import npyDataWndHist
+# from wavediffusion.model_unet import myUnet
+from unet import myUnet
+from wavediffusion.model import Scaled
+from wavediffusion.wavedata import npyDataWndHistDaily
+from wavediffusion.diffusion import ScheduleLogLinear, ScheduleDDPM, samples, masked_training_loop_lp
 
+from wavediffusion.waveutils import evaluate_lp, sample_and_save_lp
+
+### TODO: refine this to reuse mean and std stats from model reload. And multi-GPU case for computing dataset stats
 def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=False, weights_file=None,
-         ckpt_everyn_epoch=2, eval_everyn_step=100, gradient_accumulation_steps=4):
+         ckpt_everyn_epoch=1, sample_everyn_epoch=1, eval_everyn_step=100, gradient_accumulation_steps=4):
     # Setup
     print(torch.cuda.is_available())
     a = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=gradient_accumulation_steps) 
@@ -40,7 +46,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     stats = np.load(stats_file)
     meanx, stdx = stats['meanx'], stats['stdx']
     meanf, stdf = stats['meanf'], stats['stdf']
-    train = npyDataWndHist(
+    train = npyDataWndHistDaily(
         train_file_list,
         resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(train_file_path, 'mask.npy'),
@@ -51,7 +57,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     test_file_names = [('wave_200804', 'forcing_200804')]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
                        os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
-    test = npyDataWndHist(
+    test = npyDataWndHistDaily(
         test_file_list,
         resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(test_file_path, 'mask.npy'),
@@ -62,14 +68,31 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     loader = DataLoader(train, batch_size=train_batch_size, shuffle=True)
     loader_test = DataLoader(test, batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training  
 
-    model = plainUnet(in_dim=320, in_ch=13, out_ch=4, ch=256, 
-                      ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
+    schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=80, N=80)
+    # schedule_train = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=200)
+    # schedule_infer = ScheduleDDPM()
+    schedule_train = ScheduleDDPM()
+    
+    # in_ch: number of predicted quantities
+    # out_ch: number of predicted quantities
+    # precond_ch: number of conditional fields
+    # model = Scaled(myUnet)(in_dim=320, in_ch=4, out_ch=4, ch=128, precond_ch=3, 
+    #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
+    #                        ch_mult=(1, 2, 2), attn_resolutions=(16,))    
+    # model = Scaled(myUnet)(in_dim=320, in_ch=1, out_ch=1, ch=256, precond_ch=23, 
+    #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
+    #                        ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
+    
+    model = Scaled(myUnet)(in_dim=320, in_ch=1, out_ch=1, ch=320, precond_ch=23, 
+                           scale=(test.meanx, test.stdx, test.meanf, test.stdf),
+                           ch_mult=(1, 2, 2,), attn_resolutions=(80,), num_res_blocks=1,)    
 
     # Train
     log_file = open(path + "loss_log.txt", "w")
     test_log_file = open(path + "test_loss_log.txt", "w")
     ema = EMA(model.parameters(), decay=0.999)
     start_epoch = 0
+    
     if RESUME and weights_file is not None:
         ckpt = torch.load(weights_file, map_location="cpu")
         model.load_state_dict(ckpt["model"])
@@ -78,13 +101,16 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         # start_step = ckpt.get("step", 0)   # Same with steps
         if a.is_main_process:
             print(f"Resuming from epoch {start_epoch}")
+              
     ema.to(a.device)
-
-    train_iter = masked_training_loop_plain(loader, model, lr=1e-4, epochs=epochs, 
-                                            accelerator=a, start_epoch=start_epoch)
+    
+    train_iter = masked_training_loop_lp(
+        loader, model, schedule_train,
+        lr=1e-4, epochs=epochs, accelerator=a, conditional=True, start_epoch=start_epoch
+    )
 
     last_epoch = -1
-
+    
     for ns in train_iter:
         # ---- logging (only main process) ----
         if a.is_main_process:
@@ -99,33 +125,33 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
             a.wait_for_everyone()
             if a.is_main_process:     
                 print('Evaluating... at step ', ns.step)
-                val_loss = evaluate_plain(model, ema, loader_test, a) # Compute on all GPUs but gather
+                val_loss = evaluate_lp(model, ema, loader_test, schedule_train, a) # Compute on all GPUs but gather
                 test_log_file.write(f"{ns.step}, {val_loss.item():.6f}\n")
                 test_log_file.flush()
             a.wait_for_everyone()
 
-            # ---- epoch-based triggers ----
-            if ns.epoch != last_epoch:
-                last_epoch = ns.epoch
+        # ---- epoch-based triggers ----
+        if ns.epoch != last_epoch:
+            last_epoch = ns.epoch
+            a.wait_for_everyone()
+            
+            # ---- checkpoint ----
+            if ns.epoch % ckpt_everyn_epoch == 0:
                 a.wait_for_everyone()
-                
-                # ---- checkpoint ----
-                if ns.epoch % ckpt_everyn_epoch == 0:
-                    a.wait_for_everyone()
-                    if a.is_main_process:
-                        print('Saving checkpoint... at epoch ', ns.epoch)
-                        a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": ns.epoch},
-                                path + f"ckpt_{ns.epoch}.pt")
-                    a.wait_for_everyone()
+                if a.is_main_process:
+                    print('Saving checkpoint... at epoch ', ns.epoch)
+                    a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": ns.epoch},
+                            path + f"ckpt_{ns.epoch}.pt")
+                a.wait_for_everyone()
 
-                # ---- sampling ----
-                # if ns.epoch % sample_everyn_epoch == 0:
-                #     a.wait_for_everyone()
-                #     if a.is_main_process:
-                #         print('Sampling... at epoch ', ns.epoch)
-                #         sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size, 
-                #                         test=test, filename=f"sample_epoch{ns.epoch}")
-                #     a.wait_for_everyone()
+            # ---- sampling ----
+            if ns.epoch % sample_everyn_epoch == 0:
+                a.wait_for_everyone()
+                if a.is_main_process:
+                    print('Sampling... at epoch ', ns.epoch)
+                    sample_and_save_lp(model, ema, loader_test, schedule_infer, a, path, sample_batch_size, 
+                                       test=test, filename=f"sample_epoch{ns.epoch}")
+                a.wait_for_everyone()
 
     log_file.close()
     test_log_file.close()
@@ -134,8 +160,11 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         a.wait_for_everyone()
     a.end_training()
             
+        
 if __name__=='__main__':
-    path='/global/homes/j/jiarongw/scratch_folder/log1p/plain_hist/'
-    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, 
-         eval_everyn_step=100, gradient_accumulation_steps=4)    
-    # main(path, train_batch_size=8, epochs=13, sample_batch_size=2, RESUME=True, weights_file=path+'ckpt_12.pt')
+    
+    path = '/global/homes/j/jiarongw/scratch_folder/log1p/lp_hist1d/'
+    # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
+    #      gradient_accumulation_steps=4)    
+    main(path, train_batch_size=4, epochs=6, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)

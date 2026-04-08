@@ -188,7 +188,7 @@ class MultiFileNpyData(Dataset):
         return meanx, stdx, meanf, stdf
     
     def invert_x(self, x):
-        # x of shape C*H*W
+        # x of shape C*H*W (e.g. 4*320*320) normalized
         x = self.inv_tf_x(x)
         x[0] = torch.expm1(x[0])   # inverse of log1p
         return x
@@ -196,6 +196,16 @@ class MultiFileNpyData(Dataset):
     def invert_f(self, f):
         # f of shape C*H*W
         f = self.inv_tf_f(f)
+        return f
+    
+    def transform_x(self, x):
+        # x of shape C*H*W (e.g. 4*320*720) in physical unit
+        x[0] = torch.log1p(x[0]) 
+        x = self.tf_x(x)
+        return x
+    
+    def transform_f(self, f):
+        f = self.tf_f(f)
         return f
 
     def __getitem__(self, idx):

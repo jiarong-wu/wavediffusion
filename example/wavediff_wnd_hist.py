@@ -158,8 +158,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = '/global/homes/j/jiarongw/scratch_folder/log1p/hist1/'
+    path = '/global/homes/j/jiarongw/scratch_folder/log1p/hist1/continue/'
     # main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
-    main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_12.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=3, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_17.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)

@@ -398,7 +398,7 @@ from smalldiffusion.diffusion import generate_train_sample, samples
 # start_epoch = ckpt["epoch"]    
 
 @torch.no_grad()
-def evaluate(
+def evaluate_lp(
     model: nn.Module,
     ema: nn.Module,
     loader: DataLoader,
@@ -414,7 +414,7 @@ def evaluate(
             x = x.to(accelerator.device)
             f = f.to(accelerator.device)
             mask = mask.to(accelerator.device)
-            x0 = [x, f]
+            x0 = [x[:,[1]], f]
             x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
             mask = mask.to(eps.device)
             eps = eps * mask
@@ -473,8 +473,8 @@ def sample_and_save_lp(
             f_  = test.invert_f(f[i])
 
             fig = plot_sample(
-                x_.cpu().numpy()[[0], ::-1],
-                x0_.unsqueeze(0).cpu().numpy()[:, [0], ::-1],
+                x_.cpu().numpy()[[1], ::-1],
+                x0_.unsqueeze(0).cpu().numpy()[:, [1], ::-1],
                 f_.cpu().numpy()[:, ::-1],
             )
             fig.savefig(path + filename + f"_{i}.png")

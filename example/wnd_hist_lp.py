@@ -8,12 +8,14 @@ from torch_ema import ExponentialMovingAverage as EMA
 from torchvision import transforms as tf
 import torch.distributed as dist
 
-from wavediffusion.model_unet import myUnet
+# from wavediffusion.model_unet import myUnet
+from unet import myUnet
+
 from wavediffusion.model import Scaled
 from wavediffusion.wavedata import npyDataWndHist
 from wavediffusion.diffusion import ScheduleLogLinear, ScheduleDDPM, samples, masked_training_loop_lp
 
-from wavediffusion.waveutils import evaluate, sample_and_save_lp
+from wavediffusion.waveutils import evaluate_lp, sample_and_save_lp
 
 ### TODO: refine this to reuse mean and std stats from model reload. And multi-GPU case for computing dataset stats
 def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=False, weights_file=None,
@@ -78,9 +80,12 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     # model = Scaled(myUnet)(in_dim=320, in_ch=4, out_ch=4, ch=128, precond_ch=3, 
     #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
     #                        ch_mult=(1, 2, 2), attn_resolutions=(16,))    
-    model = Scaled(myUnet)(in_dim=320, in_ch=1, out_ch=1, ch=256, precond_ch=13, 
-                           scale=(train.meanx, train.stdx, train.meanf, train.stdf),
-                           ch_mult=(1, 2, 2), attn_resolutions=(16,))    
+    # model = Scaled(myUnet)(in_dim=320, in_ch=1, out_ch=1, ch=256, precond_ch=13, 
+    #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
+    #                        ch_mult=(1, 2, 2), attn_resolutions=(16,))   
+    model = Scaled(myUnet)(in_dim=320, in_ch=1, out_ch=1, ch=320, precond_ch=13, 
+                           scale=(test.meanx, test.stdx, test.meanf, test.stdf),
+                           ch_mult=(1, 2, 2,), attn_resolutions=(80,), num_res_blocks=1,)     
 
     # Train
     log_file = open(path + "loss_log.txt", "w")
@@ -120,7 +125,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
             a.wait_for_everyone()
             if a.is_main_process:     
                 print('Evaluating... at step ', ns.step)
-                val_loss = evaluate(model, ema, loader_test, schedule_train, a) # Compute on all GPUs but gather
+                val_loss = evaluate_lp(model, ema, loader_test, schedule_train, a) # Compute on all GPUs but gather
                 test_log_file.write(f"{ns.step}, {val_loss.item():.6f}\n")
                 test_log_file.flush()
             a.wait_for_everyone()
@@ -158,8 +163,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = '/global/homes/j/jiarongw/scratch_folder/log1p/lp_hist2d/'
-    main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
+    path = '/global/homes/j/jiarongw/scratch_folder/log1p/lp_hist2d_newnet/'
+    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
          gradient_accumulation_steps=4)    
     # main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=True,
-    #      weights_file=path+'ckpt_12.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    #      weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
