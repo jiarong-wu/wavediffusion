@@ -54,7 +54,7 @@ model = a.prepare(model)
 ema.to(a.device)
 
 ############## Define sampling parameters ###########
-schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=100)
+schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=80, N=80)
 
 
 ############# Sampling function ################

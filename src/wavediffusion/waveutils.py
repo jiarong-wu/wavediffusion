@@ -87,13 +87,12 @@ def plot_forcing(f):
     cbars[2].set_ticks([0,0.5,1])
     plt.tight_layout(rect=[0.06, 0, 1, 1])  # leave room on the left for text    
 
-def plot_sample_new(x_true, x, f):
-    n_sample = x.shape[0]
-    fig, axes = plt.subplots(1+n_sample, 6, figsize=[44, 3*(1+n_sample)], dpi=100)
-    titles = ['wave height','wave length','direction','spread','wind u','wind v']
+def plot_sample_parts(x_true, x_sample, f):
+    fig, axes = plt.subplots(4, 3, figsize=[44, 3*(1+n_sample)], dpi=100)
+    titles = ['wave height','wave period','direction']
     imgs = [
         axes[0, 0].imshow(x_true[0], vmin=0, vmax=10, cmap='Blues'),
-        axes[0, 1].imshow(x_true[1], vmin=0, vmax=300, cmap='Reds'),
+        axes[0, 1].imshow(x_true[1], vmin=0, vmax=20, cmap='Reds'),
         axes[0, 2].imshow(x_true[2], vmin=0, vmax=360, cmap='twilight_r'),
         axes[0, 3].imshow(x_true[3], vmin=0, vmax=90, cmap='Grays'),
         axes[0, 4].imshow(f[0], cmap='PiYG'),
@@ -211,7 +210,9 @@ def sample_and_save(
     path,
     sample_batch_size,
     test, # test dataset for inverting normalization
-    filename="sample",):   
+    filename="sample",
+    PARTS=False, # whether to plot wave partitions
+    ):   
 
     loader_iter = iter(loader)
     with ema.average_parameters():
@@ -228,19 +229,62 @@ def sample_and_save(
             x0_ = test.invert_x(x0[i]) * tf.Resize((320,720))(mask[i].to(x0))
             x_  = test.invert_x(x[i])  * tf.Resize((320,720))(mask[i].to(x))
             f_  = test.invert_f(f[i])
-
-            fig = plot_sample(
-                x_.cpu().numpy()[:, ::-1],
-                x0_.unsqueeze(0).cpu().numpy()[:, :, ::-1],
-                f_.cpu().numpy()[:, ::-1],
-            )
-            fig.savefig(path + filename + f"_{i}.png")
-            plt.close(fig)
+            if PARTS:
+                fig1 = plot_sample_parts(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.cpu().numpy()[:, ::-1],
+                )
+                fig1.savefig(path + filename + f"_parts_{i}.png")
+                fig2 = plot_crossing_frac(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.cpu().numpy()[:, ::-1],
+                )
+                fig2.savefig(path + filename + f"_crossing_{i}.png")
+                plt.close(fig1); plt.close(fig2)
+            else:
+                fig = plot_sample(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.unsqueeze(0).cpu().numpy()[:, :, ::-1],
+                    f_.cpu().numpy()[:, ::-1],
+                )
+                fig.savefig(path + filename + f"_{i}.png")
+                plt.close(fig)
+            
+        # One step sampling for conditional mean
+        sigma0 = schedule.sample_sigmas(80)[0].to(accelerator.device)
+        xt = model.rand_input(sample_batch_size).to(accelerator.device) * sigma0 * mask.to(accelerator.device)
+        eps = model.predict_eps_cfg(xt, sigma0, cond=f, cfg_scale=0) * mask.to(accelerator.device)
+        x0 = xt - eps * sigma0
+        for i in range(0, sample_batch_size):
+            x0_ = test.invert_x(x0[i]) * tf.Resize((320,720))(mask[i].to(x0))
+            x_  = test.invert_x(x[i])  * tf.Resize((320,720))(mask[i].to(x))
+            f_  = test.invert_f(f[i])            
+            if PARTS:
+                fig1 = plot_sample_parts(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.cpu().numpy()[:, ::-1],
+                )
+                fig1.savefig(path + filename + f"_onestep_parts_{i}.png")
+                fig2 = plot_crossing_frac(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.cpu().numpy()[:, ::-1],
+                )
+                fig2.savefig(path + filename + f"_onestep_crossing_{i}.png")
+                plt.close(fig1); plt.close(fig2)
+            else:
+                fig = plot_sample(
+                    x_.cpu().numpy()[:, ::-1],
+                    x0_.unsqueeze(0).cpu().numpy()[:, :, ::-1],
+                    f_.cpu().numpy()[:, ::-1],
+                )
+                fig.savefig(path + filename + f"_onestep_{i}.png")
+                plt.close(fig)
+            
             
 from matplotlib import pyplot as plt
 
 # Plotting sample v.s. truth, and forcing (only wind vectors for now)
-# x: sampled wave data, shape (C, H, W)
+# x: sampled wave data, shape (n_sample, C, H, W)
 # x_true: true wave data, shape (C, H, W)
 # f: forcing data, shape (C_f, H, W)
 def plot_sample(x_true, x, f, VAR='lp'):
@@ -326,38 +370,76 @@ def plot_forcing(f):
     cbars[2].set_ticks([0,0.5,1])
     plt.tight_layout(rect=[0.06, 0, 1, 1])  # leave room on the left for text    
 
-def plot_sample_new(x_true, x, f):
-    n_sample = x.shape[0]
-    fig, axes = plt.subplots(1+n_sample, 6, figsize=[44, 3*(1+n_sample)], dpi=100)
-    titles = ['wave height','wave length','direction','spread','wind u','wind v']
+''' Plotting sampled partition. Notice API is a bit different from plot_sample.
+    x_true: (C, H, W), C should be 6 (2 partitions of wave data)
+    x_sample: (C, H, W), C should be 6 (2 partitions of wave data)
+'''
+def plot_sample_parts(x_true, x_sample):
+    fig, axes = plt.subplots(4, 3, figsize=[35, 15], dpi=100)
+    titles = ['wave height','wave period','direction']
+    
     imgs = [
         axes[0, 0].imshow(x_true[0], vmin=0, vmax=10, cmap='Blues'),
-        axes[0, 1].imshow(x_true[1], vmin=0, vmax=300, cmap='Reds'),
+        axes[0, 1].imshow(x_true[1], vmin=0, vmax=20, cmap='Reds'),
         axes[0, 2].imshow(x_true[2], vmin=0, vmax=360, cmap='twilight_r'),
-        axes[0, 3].imshow(x_true[3], vmin=0, vmax=90, cmap='Grays'),
-        axes[0, 4].imshow(f[0], cmap='PiYG'),
-        axes[0, 5].imshow(f[1], cmap='PiYG'),
     ]
-    axes[0, 0].set_ylabel(f"Truth", fontsize=14, rotation=0, labelpad=40)
-    for j in range(6):
+    axes[0, 0].set_ylabel(f"Truth partition 1", fontsize=14, labelpad=40)
+    for j in range(3):
+        axes[0,j].set_xticks([]); axes[0,j].set_yticks([])
         axes[0,j].set_title(titles[j])
         fig.colorbar(imgs[j], ax=axes[0,j], fraction=0.046, pad=0.04)
         
-    for i in range(0, n_sample):
-        imgs_sample =[
-            axes[i+1, 0].imshow(x[i][0], vmin=0, vmax=10, cmap='Blues'),
-            axes[i+1, 1].imshow(x[i][1], vmin=0, vmax=300, cmap='Reds'),
-            axes[i+1, 2].imshow(x[i][2], vmin=0, vmax=360, cmap='twilight_r'),
-            axes[i+1, 3].imshow(x[i][3], vmin=0, vmax=90, cmap='Grays'),
-            axes[i+1, 4].imshow(f[0], cmap='PiYG'),
-            axes[i+1, 5].imshow(f[1], cmap='PiYG'),
-        ]
-        axes[i+1, 0].set_ylabel(f"Sample {i}", fontsize=14, rotation=0, labelpad=40)
+    imgs = [
+        axes[1, 0].imshow(x_sample[0], vmin=0, vmax=10, cmap='Blues'),
+        axes[1, 1].imshow(x_sample[1], vmin=0, vmax=20, cmap='Reds'),
+        axes[1, 2].imshow(x_sample[2], vmin=0, vmax=360, cmap='twilight_r'),
+    ]
+    axes[1, 0].set_ylabel(f"Sampled partition 1", fontsize=14, labelpad=40)
+    for j in range(3):
+        axes[1,j].set_xticks([]); axes[1,j].set_yticks([])
+        fig.colorbar(imgs[j], ax=axes[1,j], fraction=0.046, pad=0.04)  
         
-        for j in range(6):
-            fig.colorbar(imgs_sample[j], ax=axes[i+1,j], fraction=0.046, pad=0.04)
+    imgs = [
+        axes[2, 0].imshow(x_true[3], vmin=0, vmax=10, cmap='Blues'),
+        axes[2, 1].imshow(x_true[4], vmin=0, vmax=20, cmap='Reds'),
+        axes[2, 2].imshow(x_true[5], vmin=0, vmax=360, cmap='twilight_r'),
+    ]
+    axes[2, 0].set_ylabel(f"Truth partition 2", fontsize=14, labelpad=40)
+    for j in range(3):
+        axes[2,j].set_xticks([]); axes[2,j].set_yticks([])
+        fig.colorbar(imgs[j], ax=axes[2,j], fraction=0.046, pad=0.04)  
+
+    imgs = [
+        axes[3, 0].imshow(x_sample[3], vmin=0, vmax=10, cmap='Blues'),
+        axes[3, 1].imshow(x_sample[4], vmin=0, vmax=20, cmap='Reds'),
+        axes[3, 2].imshow(x_sample[5], vmin=0, vmax=360, cmap='twilight_r'),
+    ]
+    axes[3, 0].set_ylabel(f"Sampled partition 2", fontsize=14, labelpad=40)
+    for j in range(3):
+        axes[3,j].set_xticks([]); axes[3,j].set_yticks([])
+        fig.colorbar(imgs[j], ax=axes[3,j], fraction=0.046, pad=0.04)  
+        
+    plt.tight_layout(rect=[0.12, 0, 1, 1])  # leave room on the left for text
+    return fig
+
+''' Plotting crossing sea fraction. Notice API is a bit different from plot_sample.
+    x_true: (C, H, W), C should be 6 (2 partitions of wave data)
+    x_sample: (C, H, W), C should be 6 (2 partitions of wave data)
+'''
+def plot_crossing_frac(x_true, x_sample):
+    fig, axes = plt.subplots(1, 2, figsize=[25, 5], dpi=100)
     
-    plt.tight_layout(rect=[0.06, 0, 1, 1])  # leave room on the left for text
+    img1 = axes[0].imshow(x_true[6], vmin=0, vmax=1, cmap='binary')
+    img2 = axes[1].imshow(x_sample[6], vmin=0, vmax=1, cmap='binary')
+
+    axes[0].set_title(f"Truth", fontsize=14)
+    axes[1].set_title(f"Sampled", fontsize=14)
+    axes[0].set_xticks([]); axes[0].set_yticks([])
+    axes[1].set_xticks([]); axes[1].set_yticks([])
+    fig.colorbar(img1, ax=axes[0], fraction=0.046, pad=0.04)
+    fig.colorbar(img2, ax=axes[1], fraction=0.046, pad=0.04)
+        
+    plt.tight_layout()  # leave room on the left for text
     return fig
 
 def plot_wave(x, label='None'):

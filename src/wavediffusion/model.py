@@ -84,8 +84,13 @@ def PredX0(cls: ModelMixin):
     def predict_eps(self, x, sigma, cond=None):
         x0_hat = self(x, sigma, cond=cond)
         return (x - x0_hat)/sigma
+    def get_loss_masked(self, x0, sigma, eps, cond=None, mask=None, loss=nn.MSELoss):
+        if mask != None:
+            return loss()(x0*mask, self(x0 + sigma * eps, sigma, cond=cond)*mask)
+        else:
+            print('Should provide mask!')
     return type(cls.__name__ + 'PredX0', (cls,),
-                dict(get_loss=get_loss, predict_eps=predict_eps))
+                dict(get_loss=get_loss, predict_eps=predict_eps, get_loss_masked=get_loss_masked))
 
 # Train model to predict v (https://arxiv.org/pdf/2202.00512.pdf) instead of eps
 def PredV(cls: ModelMixin):

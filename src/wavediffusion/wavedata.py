@@ -24,6 +24,7 @@ class MultiFileNpyData(Dataset):
 
         # OPTION1: wave height + wave length + direction + spread
         # OPTION2: wave height + stokes drift u + v
+        # OPTION3: partition 1 wave height + wave period + direction + partition 2 wave height + wave period + direction + crossing sea criterion
         self.OPTION = OPTION
         
         # Load all files with memory mapping
@@ -190,7 +191,11 @@ class MultiFileNpyData(Dataset):
     def invert_x(self, x):
         # x of shape C*H*W (e.g. 4*320*320) normalized
         x = self.inv_tf_x(x)
-        x[0] = torch.expm1(x[0])   # inverse of log1p
+        if self.OPTION in [1, 2]:
+            x[0] = torch.expm1(x[0])   # inverse of log1p
+        elif self.OPTION == 3:
+            x[0] = torch.expm1(x[0])   # inverse of log1p
+            x[3] = torch.expm1(x[3])   # inverse of log1p
         return x
     
     def invert_f(self, f):
@@ -228,6 +233,13 @@ class MultiFileNpyData(Dataset):
             x_raw = self.X_files[file_idx][local_idx][[0,4,5]]
             x = torch.from_numpy(x_raw).float().clone()
             x[0] = torch.log1p(x[0]) 
+            f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+            
+        if self.OPTION == 3:
+            x_raw = self.X_files[file_idx][local_idx]
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            x[3] = torch.log1p(x[3])
             f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
         
         # Apply transforms
@@ -332,10 +344,10 @@ class npyDataWndHist(npyDataResized):
         landmaskname=None, use_icymask=True,
         compute_stats=True,
         meanx=None, stdx=None, meanf=None, stdf=None,
-        resize_x=None, resize_f=None):
+        resize_x=None, resize_f=None, OPTION=1):
         super().__init__(
             file_list, landmaskname, use_icymask,
-            compute_stats, meanx, stdx, meanf, stdf,)
+            compute_stats, meanx, stdx, meanf, stdf, OPTION)
         # Master class initiation ...
         # Expand scaling for wind history (add 2 more channels)
         for i in range(0,5):
@@ -379,6 +391,8 @@ class npyDataWndHist(npyDataResized):
         # Load from the appropriate file
         x = self.X_files[file_idx][local_idx].copy()
         x[0] = np.log1p(x[0])
+        if self.OPTION == 3:
+            x[3] = np.log1p(x[3])
         x = torch.from_numpy(x).float()
         f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
         for i in range(8, 48, 8):
@@ -399,7 +413,7 @@ class npyDataWndHistDaily(npyDataResized):
         landmaskname=None, use_icymask=True,
         compute_stats=True,
         meanx=None, stdx=None, meanf=None, stdf=None,
-        resize_x=None, resize_f=None):
+        resize_x=None, resize_f=None, OPTION=1):
         super().__init__(
             file_list, landmaskname, use_icymask,
             compute_stats, meanx, stdx, meanf, stdf,)
@@ -446,6 +460,8 @@ class npyDataWndHistDaily(npyDataResized):
         # Load from the appropriate file
         x = self.X_files[file_idx][local_idx].copy()
         x[0] = np.log1p(x[0])
+        if self.OPTION == 3:
+            x[3] = np.log1p(x[3])
         x = torch.from_numpy(x).float()
         f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
         for i in range(4, 44, 4):

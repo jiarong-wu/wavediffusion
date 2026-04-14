@@ -25,35 +25,38 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/train_global/'
     train_file_names = [
-        *( (f'wave_2010{i:02d}', f'forcing_2010{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2012{i:02d}', f'forcing_2012{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2016{i:02d}', f'forcing_2016{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2017{i:02d}', f'forcing_2017{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2018{i:02d}', f'forcing_2018{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2019{i:02d}', f'forcing_2019{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2020{i:02d}', f'forcing_2020{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2021{i:02d}', f'forcing_2021{i:02d}') for i in range(1, 13) ),
-        *( (f'wave_2022{i:02d}', f'forcing_2022{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2010{i:02d}', f'forcing_2010{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2012{i:02d}', f'forcing_2012{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2016{i:02d}', f'forcing_2016{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2017{i:02d}', f'forcing_2017{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2018{i:02d}', f'forcing_2018{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2019{i:02d}', f'forcing_2019{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2020{i:02d}', f'forcing_2020{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2021{i:02d}', f'forcing_2021{i:02d}') for i in range(1, 13) ),
+        *( (f'waveparts_2022{i:02d}', f'forcing_2022{i:02d}') for i in range(1, 13) ),
     ]
     train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
                         os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]   
-    stats_file = os.path.join(train_file_path, 'stats.npz')
-    stats = np.load(stats_file)
-    meanx, stdx = stats['meanx'], stats['stdx']
+    stats_file1 = os.path.join(train_file_path, 'stats.npz')
+    stats = np.load(stats_file1)
     meanf, stdf = stats['meanf'], stats['stdf']
+    stats_file2 = os.path.join(train_file_path, 'stats_parts.npz')
+    stats_parts = np.load(stats_file2)
+    meanx, stdx = stats_parts['meanparts'], stats_parts['stdparts']
     train = npyDataWndHist(
         train_file_list,
         resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(train_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
-        meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf
+        meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
+        OPTION=3
     )
     test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/test_global/'
-    test_file_names = [('wave_200804', 'forcing_200804')]
+    test_file_names = [('waveparts_200404', 'forcing_200404')]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
                        os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
     test = npyDataWndHist(
@@ -61,14 +64,15 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(test_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
-        meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf
+        meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
+        OPTION=3
     )
 
     loader = DataLoader(train, batch_size=train_batch_size, shuffle=True)
     loader_test = DataLoader(test, batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training  
 
     schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
-    schedule_train = ScheduleLogLinear(sigma_min=80, sigma_max=200, N=10)
+    schedule_train = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
     # schedule_infer = ScheduleDDPM()
     # schedule_train = ScheduleDDPM()
     
@@ -81,7 +85,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     # model = Scaled(myUnet)(in_dim=320, in_ch=4, out_ch=4, ch=256, precond_ch=13, 
     #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
     #                        ch_mult=(1, 2, 2), attn_resolutions=(16,))    
-    model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=4, out_ch=4, ch=256, precond_ch=13, 
+    model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=13, 
                            scale=(train.meanx, train.stdx, train.meanf, train.stdf),
                            ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
 
@@ -148,7 +152,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
                 if a.is_main_process:
                     print('Sampling... at epoch ', ns.epoch)
                     sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size, 
-                                    test=test, filename=f"sample_epoch{ns.epoch}")
+                                    test=test, filename=f"sample_epoch{ns.epoch}", PARTS=True)
                 a.wait_for_everyone()
 
     log_file.close()
@@ -161,8 +165,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = '/global/homes/j/jiarongw/scratch_folder/log1p/hist1_PredX0/'
-    # main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
+    path = '/global/homes/j/jiarongw/scratch_folder/log1p/waveparts_hist_PredX0/'
+    # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
-    main(path, train_batch_size=4, epochs=8, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_8.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)

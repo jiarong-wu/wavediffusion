@@ -329,3 +329,21 @@ def samples_thres(model      : nn.Module,
         else:
             xt = xt - (sig - sig_p) * eps_av + eta * model.rand_input(xt.shape[0]).to(xt) 
         yield xt
+        
+''' One-step sampling function for probing the model's behavior at high noise levels (e.g. sigma=20). '''        
+@torch.no_grad()
+def samples_onestep(model      : nn.Module,
+            sigma_max : float = 20.,   # A high noise level to probe model behavior
+            batchsize  : int = 1,
+            cond       : Optional[torch.Tensor] = None, 
+            accelerator: Optional[Accelerator] = None, 
+            mask       : Optional[torch.FloatTensor] = None):
+    model.eval()
+    accelerator = accelerator or Accelerator()
+    sigma0 = torch.tensor([sigma_max]).to(accelerator.device) # A very large noise level 
+    xt = model.rand_input(batchsize).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use randomly generated noise to probe the high noise level?
+    # xt = torch.zeros((batchsize,) + model.input_dims).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use 0 to probe the high noise level?
+    eps = model.predict_eps_cfg(xt, sigma0, cond=cond.to(accelerator.device)) * mask.to(accelerator.device)
+    x0 = xt - eps * sigma0
+    # x0 = model.forward(xt, sigma0, cond=f.to(a.device)) * mask.to(a.device) # Only works if model is predicting state    
+    return x0

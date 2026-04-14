@@ -24,9 +24,6 @@ __pycache__
 .venv
 .coverage
 
-# data files and results
-/run/*
-/run/*
-/datasets/*
+# data files and resultsc
 /temp/*
 /example/temp/*
