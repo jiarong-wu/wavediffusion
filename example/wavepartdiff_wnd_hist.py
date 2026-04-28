@@ -72,9 +72,9 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     loader_test = DataLoader(test, batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training  
 
     schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
-    schedule_train = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
+    # schedule_train = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
     # schedule_infer = ScheduleDDPM()
-    # schedule_train = ScheduleDDPM()
+    schedule_train = ScheduleDDPM()
     
     # in_ch: number of predicted quantities
     # out_ch: number of predicted quantities
@@ -85,7 +85,10 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     # model = Scaled(myUnet)(in_dim=320, in_ch=4, out_ch=4, ch=256, precond_ch=13, 
     #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
     #                        ch_mult=(1, 2, 2), attn_resolutions=(16,))    
-    model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=13, 
+    # model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=13, 
+    #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
+    #                        ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
+    model = Scaled(myUnet)(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=13, 
                            scale=(train.meanx, train.stdx, train.meanf, train.stdf),
                            ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
 
@@ -165,8 +168,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = '/global/homes/j/jiarongw/scratch_folder/log1p/waveparts_hist_PredX0/'
+    path = '/global/homes/j/jiarongw/scratch_folder/log1p/waveparts_hist/'
     # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
     main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+         weights_file=path+'ckpt_28.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)

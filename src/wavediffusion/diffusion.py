@@ -343,7 +343,7 @@ def samples_onestep(model      : nn.Module,
     sigma0 = torch.tensor([sigma_max]).to(accelerator.device) # A very large noise level 
     xt = model.rand_input(batchsize).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use randomly generated noise to probe the high noise level?
     # xt = torch.zeros((batchsize,) + model.input_dims).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use 0 to probe the high noise level?
-    eps = model.predict_eps_cfg(xt, sigma0, cond=cond.to(accelerator.device)) * mask.to(accelerator.device)
+    eps = model.predict_eps(xt, sigma0, cond=cond.to(accelerator.device)) * mask.to(accelerator.device)
     x0 = xt - eps * sigma0
     # x0 = model.forward(xt, sigma0, cond=f.to(a.device)) * mask.to(a.device) # Only works if model is predicting state    
     return x0

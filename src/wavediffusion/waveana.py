@@ -6,6 +6,16 @@ ds = xr.open_dataset('/global/homes/j/jiarongw/scratch_folder/wave_data/raw/LOPS
 lat_deg = ds.latitude.values[1:-2]
 lon_deg = ds.longitude.values
 
+''' Making a dataset out of fields '''
+def add_lat_lon (fields, fieldnames):
+    global lat_deg, lon_deg    
+    ds = xr.Dataset({
+        name: (('lat', 'lon'), field)
+        for field, name in zip(fields, fieldnames)
+    }, coords={'lat': lat_deg, 'lon': lon_deg})
+    return ds
+
+''' Compute gradient '''
 def assemble (hs, lp, theta, wnd, ice):
 
     global lat_deg, lon_deg    
