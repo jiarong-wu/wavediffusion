@@ -6,10 +6,10 @@ from utils import get_top2_indices
 def read_mean (readpath='/scratch/jw8736/wavecnn/data/', year=2008, month=1):
     ### Generate mean data
     ds = xr.open_dataset(readpath + f'LOPS_WW3-GLOB-30M_{year:04d}{month:02d}.nc')
-    hs_mean = ds.hs.values; lp_mean = ds.lm.values; dir_mean = ds.dir.values; spr_mean = ds.spr.values
+    hs_mean = ds.hs.values; t_mean = ds.t0m1.values; dir_mean = ds.dir.values; spr_mean = ds.spr.values
     uuss = ds.uuss.values; vuss = ds.vuss.values
     mssu = ds.mssu.values; mssc = ds.mssc.values; mssd = ds.mssd.values
-    mean = np.stack([hs_mean, lp_mean, dir_mean, spr_mean, uuss, vuss, mssu, mssc, mssd], axis=0)
+    mean = np.stack([hs_mean, t_mean, dir_mean, spr_mean, uuss, vuss, mssu, mssc, mssd], axis=0)
     mean = np.swapaxes(mean, 0, 1)
     ### Generate forcing data
     # Icy mask
@@ -91,33 +91,23 @@ def read_2par (readpath='/scratch/jw8736/wavecnn/data/', year=2008, month=1):
     Training: 2010-01 to 2022-12
     Testing: 2004
 '''
-    
-# if __name__=='__main__':
-#     readpath = '/global/homes/j/jiarongw/scratch_folder/wave_data/raw/'
-#     savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/train_global/'
-#     savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/stokes_global/'
-#     for year in range(2001,2003):
-#         for month in range(1,13):
-#             print('Processing year: {}, month: {} ...'.format(year, month))
-#             wave, forcing = read_save_mean(readpath, year, month)
-#             # Global but remove three latitude rows
-#             np.save(savepath + f'wave_{year:04d}{month:02d}.npy', wave[:401, :, 1:-2])
-#             np.save(savepath + f'forcing_{year:04d}{month:02d}.npy', forcing[:401, :, 1:-2])
-#             # Mask already saved
-#             # mask = np.load('../datasets/mask.npy')
-#             # np.save('../datasets/train_global/mask.npy', mask[1:-2])
-#             # np.save('../datasets/test_global/mask.npy', mask[1:-2])    
 
 if __name__=='__main__':
     readpath = '/global/homes/j/jiarongw/scratch_folder/wave_data/raw/'
-    savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/train_global/'
-    savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/test_global/'
-    for year in range(2004,2005):
+    savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
+    # savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
+    for year in range(1993,2004):
         for month in range(1,13):
             print('Processing year: {}, month: {} ...'.format(year, month))
-            parts = read_2par (readpath, year, month)
-            # Global but remove three latitude rows
-            np.save(savepath + f'waveparts_{year:04d}{month:02d}.npy', parts[:401, :, 1:-2])
+            
+            # Saving the partitions
+            # parts = read_2par (readpath, year, month)
+            # np.save(savepath + f'waveparts_{year:04d}{month:02d}.npy', parts[:, :, 1:-2])
+            # Saving the mean and the other derived variables
+            mean, forcing = read_mean (readpath, year, month)
+            np.save(savepath + f'wavemean_{year:04d}{month:02d}.npy', mean[:, :, 1:-2])
+            np.save(savepath + f'forcing_{year:04d}{month:02d}.npy', forcing[:, :, 1:-2])
+            
             # Mask already saved
             # mask = np.load('../datasets/mask.npy')
             # np.save('../datasets/train_global/mask.npy', mask[1:-2])

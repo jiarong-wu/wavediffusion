@@ -8,116 +8,11 @@
 
 A lightweight diffusion model adopted from [blog-url] for sea state estimation. Below are the original README. Install locally in editable mode using `make install-local`.
 
-A lightweight diffusion library for training and sampling from diffusion
-models. It is built for easy experimentation when training new models and
-developing new samplers, supporting minimal toy models to state-of-the-art
-pretrained models. The [core of this library][diffusion-py] for diffusion
-training and sampling is implemented in less than 100 lines of very readable
-pytorch code. To install from [pypi][pypi-url]:
+`/data` provides scripts that process the raw data. In particular we use the [ifremer-hindcast] dataset.
 
-```
-pip install smalldiffusion
-```
+`/script` provides a few script for downloading data, postprocessing, and cluster job scheduling.
 
-### Toy models
-To train and sample from the `Swissroll` toy dataset in 10 lines of code (see
-[examples/toyexample.ipynb](/examples/toyexample.ipynb) for a detailed
-guide):
-
-```python
-from torch.utils.data import DataLoader
-from smalldiffusion import Swissroll, TimeInputMLP, ScheduleLogLinear, training_loop, samples
-
-dataset  = Swissroll(np.pi/2, 5*np.pi, 100)
-loader   = DataLoader(dataset, batch_size=2048)
-model    = TimeInputMLP(hidden_dims=(16,128,128,128,128,16))
-schedule = ScheduleLogLinear(N=200, sigma_min=0.005, sigma_max=10)
-trainer  = training_loop(loader, model, schedule, epochs=15000)
-losses   = [ns.loss.item() for ns in trainer]
-*xt, x0  = samples(model, schedule.sample_sigmas(20), gam=2)
-```
-
-Results on various toy datasets:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yuanchenyang/smalldiffusion/main/imgs/toy_models.png" width=100%>
-</p>
-
-### Conditional training and sampling with classifier-free guidance
-
-We can also train conditional diffusion models and sample from them using
-[classifier-free guidance][cfg-paper]. In
-[examples/cond_tree_model.ipynb](/examples/cond_tree_model.ipynb), samples from
-each class in the 2D tree dataset are represented with a different color.
-
-<p align="center">
-  <img src="/imgs/cfg.png" width=100%>
-</p>
-
-### Diffusion transformer
-We provide [a concise implementation][model-code] of the diffusion transformer introduced in
-[[Peebles and Xie 2022]][dit-paper]. To train a model on the FashionMNIST dataset and
-generate a batch of samples (after first running `accelerate config`):
-
-```
-accelerate launch examples/fashion_mnist_dit.py
-```
-
-With the provided default parameters and training on a single GPU for around 2
-hours, the model can achieve a [FID
-score](https://paperswithcode.com/sota/image-generation-on-fashion-mnist) of
-around 5-6, producing the following generated outputs:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yuanchenyang/smalldiffusion/main/imgs/fashion-mnist-samples.png" width=50%>
-</p>
-
-### U-Net models
-The same code can be used to train [U-Net-based models][unet-py].
-
-```
-accelerate launch examples/fashion_mnist_unet.py
-```
-
-We also provide example code to train a U-Net on the CIFAR-10 dataset, with an
-unconditional generation FID of around 3-4:
-
-```
-accelerate launch examples/cifar_unet.py
-```
-
-<p align="center">
-  <img src="/imgs/cifar-samples.png" width=50%>
-</p>
-
-### StableDiffusion
-smalldiffusion's sampler works with any pretrained diffusion model, and supports
-DDPM, DDIM as well as accelerated sampling algorithms. In
-[examples/diffusers_wrapper.py][diffusers-wrapper], we provide a
-simple wrapper for any pretrained [huggingface
-diffusers](https://github.com/huggingface/diffusers) latent diffusion model,
-enabling sampling from pretrained models with only a few lines of code:
-
-```python
-from diffusers_wrapper import ModelLatentDiffusion
-from smalldiffusion import ScheduleLDM, samples
-
-schedule = ScheduleLDM(1000)
-model    = ModelLatentDiffusion('stabilityai/stable-diffusion-2-1-base')
-model.set_text_condition('An astronaut riding a horse')
-*xts, x0 = samples(model, schedule.sample_sigmas(50))
-decoded  = model.decode_latents(x0)
-```
-
-It is easy to experiment with different sampler parameters and sampling
-schedules, as demonstrated in [examples/stablediffusion.py][stablediffusion]. A
-few examples on tweaking the parameter `gam`:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yuanchenyang/smalldiffusion/main/imgs/sd_examples.jpg" width=100%>
-</p>
-
-# How to use
+## The original smalldiffusion repo
 The core of smalldiffusion depends on the interaction between `data`, `model`
 and `schedule` objects. Here we give a specification of these objects. For a
 detailed introduction to diffusion models and the notation used in the code, see
@@ -207,6 +102,9 @@ For more details on how these sampling algorithms can be simplified, generalized
 and implemented in only 5 lines of code, see Appendix A of [[Permenter and
 Yuan]][arxiv-url].
 
+
+
+[ifremer-hindcast]:https://data-dataref.ifremer.fr/ww3/GLOBMULTI_ERA5_GLOBCUR_01/GLOB-30M/
 
 [diffusion-py]:https://github.com/yuanchenyang/smalldiffusion/blob/main/src/smalldiffusion/diffusion.py
 [unet-py]:https://github.com/yuanchenyang/smalldiffusion/blob/main/src/smalldiffusion/model_unet.py

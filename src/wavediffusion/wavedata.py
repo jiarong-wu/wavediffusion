@@ -4,7 +4,21 @@ from torch.utils.data import Dataset
 import torchvision.transforms as tf
 from pathlib import Path
 
-### Suggested multi file data class by Claude
+''' Data loading and processing classes for wave diffusion model.
+    wave mean files have 9 channels: hs, t0m1, dir, spr, uuss, vuss, mssu, mssc, mssd
+        OPTION 1: use [0,1,2] (hs, t0m1, dir) as x channels
+        OPTION 2: use [0,4,5,6,7] (hs, uuss, vuss, mssu, mssc) as x channels (for now)
+    wave partition files have 7 channels: hs_p1, tp_p1, dir_p1, hs_p2, tp_p2, dir_p2, crossing sea criterion
+        OPTION 3: use all 7 channels as x channels
+    f files have 5 channels: uwnd, vwnd, icymask, dpt, ice fraction (skipping channel 3 when loading, but use as mask)
+    For all options, use [0,1,3,4] (uwnd, vwnd, dpt, ice fraction) as f channels.
+    hs, hs_p1, hs_p2 are log1p transformed before normalization.
+    Within mean and std computation:
+        mean and std of icymask and ice fraction set to 0 and 1 respectively (not normalized); 
+        mean and std of crossing sea criterion set to 0 and 1 respectively (not normalized).
+'''
+
+### Multi file data class 
 class MultiFileNpyData(Dataset):
     def __init__(self, 
         file_list,  # List of tuples: [(Xname, Fname), ...] for each month
@@ -22,7 +36,7 @@ class MultiFileNpyData(Dataset):
         """
         super().__init__()
 
-        # OPTION1: wave height + wave length + direction + spread
+        # OPTION1: wave height + wave period + direction 
         # OPTION2: wave height + stokes drift u + v
         # OPTION3: partition 1 wave height + wave period + direction + partition 2 wave height + wave period + direction + crossing sea criterion
         self.OPTION = OPTION
@@ -38,7 +52,7 @@ class MultiFileNpyData(Dataset):
             f_mmap = np.load(f_path, mmap_mode="r")
             
             self.X_files.append(x_mmap)
-            self.F_files.append(f_mmap[:, 0:3])  # Load U, V, and icymask
+            self.F_files.append(f_mmap[:])  # Load U, V, icymask, dpt, ice 
             
             file_len = len(x_mmap) - 1  # -1 to prevent last sample
             self.file_lengths.append(file_len)
@@ -57,8 +71,6 @@ class MultiFileNpyData(Dataset):
         if compute_stats:
             print("Computing dataset mean and std across all files...")
             meanx, stdx, meanf, stdf = self._compute_mean_std()
-            meanf[2] = 0.0  # icymask not normalized
-            stdf[2] = 1.0  # icymask not normalized
         else:
             assert meanx is not None and stdx is not None, "Must provide meanx/stdx when compute_stats=False"
             assert meanf is not None and stdf is not None, "Must provide meanf/stdf when compute_stats=False"
@@ -97,10 +109,16 @@ class MultiFileNpyData(Dataset):
         return self.total_length
     
     def _compute_mean_std(self):
-        """Compute channel-wise mean and std across all files."""           
-        # Get number of channels from first file
-        n_channels_x = self.X_files[0].shape[1]
-        n_channels_f = self.F_files[0].shape[1]
+        """Compute channel-wise mean and std across all files."""  
+
+        # Manually specify each option x channel number                         
+        if self.OPTION == 1:
+            n_channels_x = 3
+        elif self.OPTION == 2:   
+            n_channels_x = 5
+        elif self.OPTION == 3:
+            n_channels_x = 7                    
+        n_channels_f = 4  # Only consider uwnd, vwnd, dpt, ice fraction for normalization; skip icymask since it's binary and used as mask.
         
         # Initialize accumulators
         sum_x = np.zeros(n_channels_x)
@@ -124,13 +142,25 @@ class MultiFileNpyData(Dataset):
                 total_pixels += n_valid_pixels
                 # print(total_pixels)
            
-            # Preprocess x_file: log1p on channel 0
-            x_file_proc = x_file.copy()                # avoid modifying mmap
-            x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
-            
+            # Preprocess x_file: log1p on channel 0                            
+            if self.OPTION == 1:
+                x_file_proc = x_file.copy()[:,[0,1,2]] # avoid modifying mmap, take only the relevant channels
+                x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
+                n_channels_x = 3
+            elif self.OPTION == 2:   
+                x_file_proc = x_file.copy()[:,[0,4,5,6,7]]
+                x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
+                n_channels_x = 5
+            elif self.OPTION == 3:
+                x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
+                x_file_proc[:, 3, :, :] = np.log1p(x_file_proc[:, 3, :, :]) 
+                n_channels_x = 7
+            # Select only wind and depth and ice fraction
+            f_file_select = f_file[:, [0,1,3,4], :, :]
+                    
             # Apply mask
             X_masked = x_file_proc * mask_broadcast
-            F_masked = f_file * mask_broadcast
+            F_masked = f_file_select * mask_broadcast
         
             # Accumulate sums
             sum_x += np.nansum(X_masked, axis=(0, 2, 3))
@@ -145,6 +175,13 @@ class MultiFileNpyData(Dataset):
         # Calculate std using accumulated sum of squares
         stdx = np.sqrt(sum_sq_x / total_pixels - meanx**2)
         stdf = np.sqrt(sum_sq_f / total_pixels - meanf**2)
+        
+        meanf[3] = 0.0  # icy fraction not normalized
+        stdf[3] = 1.0  # icy fraction not normalized
+        
+        if self.OPTION == 3:
+            meanx[-1] = 0 # Set mean of crossing sea criterion to 0 
+            stdx[-1] = 1 # Set std of crossing sea criterion to 1 
         
         return meanx, stdx, meanf, stdf
     
@@ -224,30 +261,32 @@ class MultiFileNpyData(Dataset):
         # x = torch.from_numpy(x).float()
         
         if self.OPTION == 1:
-            x_raw = self.X_files[file_idx][local_idx]
+            x_raw = self.X_files[file_idx][local_idx][[0,1,2]] # height, period, direction
             x = torch.from_numpy(x_raw).float().clone()
             x[0] = torch.log1p(x[0]) 
-            f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
 
         if self.OPTION == 2:
-            x_raw = self.X_files[file_idx][local_idx][[0,4,5]]
+            x_raw = self.X_files[file_idx][local_idx][[0,4,5,6,7]]
             x = torch.from_numpy(x_raw).float().clone()
             x[0] = torch.log1p(x[0]) 
-            f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
             
         if self.OPTION == 3:
             x_raw = self.X_files[file_idx][local_idx]
             x = torch.from_numpy(x_raw).float().clone()
             x[0] = torch.log1p(x[0]) 
             x[3] = torch.log1p(x[3])
-            f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
         
         # Apply transforms
         x = self.tf_x(x)
         f = self.tf_f(f)
-        mask = f[[2],:,:]
        
-        return x, f, mask
+        return x, f, icymask
 
 
 ### Masked dataset functions and class. 
@@ -289,6 +328,7 @@ class npyDataResized(MultiFileNpyData):
             tf.Normalize(self.meanf.tolist(), self.stdf.tolist()),
             Mask(self.landmask_resized)
         ])
+        self.tf_icymask = tf.Resize(resize_f)  # for resizing icymask separately if needed
         # Inverse transforms
         self.inv_tf_x = tf.Compose([
             tf.Resize((self.original_H, self.original_W)),
@@ -302,8 +342,11 @@ class npyDataResized(MultiFileNpyData):
             tf.Normalize(mean=(-self.meanf).tolist(), std=[1]*len(self.stdf)),
             Mask(self.landmask_original)
         ])
-
-
+    
+    def __getitem__(self, idx):
+        x, f, mask = super().__getitem__(idx)
+        mask = self.tf_icymask(mask)
+        return x, f, mask
 
 # Example usage:
 if __name__ == "__main__":
@@ -338,7 +381,6 @@ if __name__ == "__main__":
 
 
 ### With wind history.
-
 class npyDataWndHist(npyDataResized):
     def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month
         landmaskname=None, use_icymask=True,
@@ -388,13 +430,29 @@ class npyDataWndHist(npyDataResized):
         """Get item by global index - automatically finds correct file."""
         # Map global index to file and local index
         file_idx, local_idx = self._get_file_and_local_idx(idx + 40)
-        # Load from the appropriate file
-        x = self.X_files[file_idx][local_idx].copy()
-        x[0] = np.log1p(x[0])
+
+        if self.OPTION == 1:
+            x_raw = self.X_files[file_idx][local_idx][[0,1,2]] # height, period, direction
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+
+        if self.OPTION == 2:
+            x_raw = self.X_files[file_idx][local_idx][[0,4,5,6,7]]
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+            
         if self.OPTION == 3:
-            x[3] = np.log1p(x[3])
-        x = torch.from_numpy(x).float()
-        f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+            x_raw = self.X_files[file_idx][local_idx]
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            x[3] = torch.log1p(x[3])
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+            
         for i in range(8, 48, 8):
             file_idx_hist, local_idx_hist = self._get_file_and_local_idx(idx + i)
             f_hist = torch.from_numpy(self.F_files[file_idx_hist][local_idx_hist]).float()
@@ -403,77 +461,77 @@ class npyDataWndHist(npyDataResized):
         # Apply transforms
         x = self.tf_x(x)
         f = self.tf_f(f)
-        mask = f[[2],:,:]
+        icymask = self.tf_icymask(icymask)
         
-        return x, f, mask
+        return x, f, icymask
     
     
-class npyDataWndHistDaily(npyDataResized):
-    def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month
-        landmaskname=None, use_icymask=True,
-        compute_stats=True,
-        meanx=None, stdx=None, meanf=None, stdf=None,
-        resize_x=None, resize_f=None, OPTION=1):
-        super().__init__(
-            file_list, landmaskname, use_icymask,
-            compute_stats, meanx, stdx, meanf, stdf,)
-        # Master class initiation ...
-        # Expand scaling for wind history (add 2 more channels)
-        for i in range(0,10):
-            self.meanf = torch.cat([self.meanf, self.meanf[0:2]], dim=0)
-        for i in range(0,10):
-            self.stdf = torch.cat([self.stdf, self.stdf[0:2]], dim=0)
+# class npyDataWndHistDaily(npyDataResized):
+#     def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month
+#         landmaskname=None, use_icymask=True,
+#         compute_stats=True,
+#         meanx=None, stdx=None, meanf=None, stdf=None,
+#         resize_x=None, resize_f=None, OPTION=1):
+#         super().__init__(
+#             file_list, landmaskname, use_icymask,
+#             compute_stats, meanx, stdx, meanf, stdf,)
+#         # Master class initiation ...
+#         # Expand scaling for wind history (add 2 more channels)
+#         for i in range(0,10):
+#             self.meanf = torch.cat([self.meanf, self.meanf[0:2]], dim=0)
+#         for i in range(0,10):
+#             self.stdf = torch.cat([self.stdf, self.stdf[0:2]], dim=0)
         
-        self.tf_x = tf.Compose([
-            FillNaN(0.0),
-            tf.Resize(resize_x),
-            tf.Normalize(self.meanx.tolist(), self.stdx.tolist()),
-            Mask(self.landmask_resized)
-        ])
-        self.tf_f = tf.Compose([
-            FillNaN(0.0),
-            tf.Resize(resize_f),
-            tf.Normalize(self.meanf.tolist(), self.stdf.tolist()),
-            Mask(self.landmask_resized)
-        ])
-        # Inverse transforms
-        self.inv_tf_x = tf.Compose([
-            tf.Resize((self.original_H, self.original_W)),
-            tf.Normalize(mean=[0]*len(self.meanx), std=(1/self.stdx).tolist()),
-            tf.Normalize(mean=(-self.meanx).tolist(), std=[1]*len(self.stdx)),
-            Mask(self.landmask_original)
-        ])
-        self.inv_tf_f = tf.Compose([
-            tf.Resize((self.original_H, self.original_W)),
-            tf.Normalize(mean=[0]*len(self.meanf), std=(1/self.stdf).tolist()),
-            tf.Normalize(mean=(-self.meanf).tolist(), std=[1]*len(self.stdf)),
-            Mask(self.landmask_original)
-        ])
+#         self.tf_x = tf.Compose([
+#             FillNaN(0.0),
+#             tf.Resize(resize_x),
+#             tf.Normalize(self.meanx.tolist(), self.stdx.tolist()),
+#             Mask(self.landmask_resized)
+#         ])
+#         self.tf_f = tf.Compose([
+#             FillNaN(0.0),
+#             tf.Resize(resize_f),
+#             tf.Normalize(self.meanf.tolist(), self.stdf.tolist()),
+#             Mask(self.landmask_resized)
+#         ])
+#         # Inverse transforms
+#         self.inv_tf_x = tf.Compose([
+#             tf.Resize((self.original_H, self.original_W)),
+#             tf.Normalize(mean=[0]*len(self.meanx), std=(1/self.stdx).tolist()),
+#             tf.Normalize(mean=(-self.meanx).tolist(), std=[1]*len(self.stdx)),
+#             Mask(self.landmask_original)
+#         ])
+#         self.inv_tf_f = tf.Compose([
+#             tf.Resize((self.original_H, self.original_W)),
+#             tf.Normalize(mean=[0]*len(self.meanf), std=(1/self.stdf).tolist()),
+#             tf.Normalize(mean=(-self.meanf).tolist(), std=[1]*len(self.stdf)),
+#             Mask(self.landmask_original)
+#         ])
     
-    def __len__(self):
-        return self.total_length - 40
+#     def __len__(self):
+#         return self.total_length - 40
     
-    def __getitem__(self, idx):
-        """Get item by global index - automatically finds correct file."""
-        # Map global index to file and local index
-        file_idx, local_idx = self._get_file_and_local_idx(idx + 40)
-        # Load from the appropriate file
-        x = self.X_files[file_idx][local_idx].copy()
-        x[0] = np.log1p(x[0])
-        if self.OPTION == 3:
-            x[3] = np.log1p(x[3])
-        x = torch.from_numpy(x).float()
-        f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
-        for i in range(4, 44, 4):
-            file_idx_hist, local_idx_hist = self._get_file_and_local_idx(idx + i)
-            f_hist = torch.from_numpy(self.F_files[file_idx_hist][local_idx_hist]).float()
-            f = torch.cat([f, f_hist[[0,1], :, :]], dim=0)  # Append historical wind speed and direction
+#     def __getitem__(self, idx):
+#         """Get item by global index - automatically finds correct file."""
+#         # Map global index to file and local index
+#         file_idx, local_idx = self._get_file_and_local_idx(idx + 40)
+#         # Load from the appropriate file
+#         x = self.X_files[file_idx][local_idx].copy()
+#         x[0] = np.log1p(x[0])
+#         if self.OPTION == 3:
+#             x[3] = np.log1p(x[3])
+#         x = torch.from_numpy(x).float()
+#         f = torch.from_numpy(self.F_files[file_idx][local_idx]).float()
+#         for i in range(4, 44, 4):
+#             file_idx_hist, local_idx_hist = self._get_file_and_local_idx(idx + i)
+#             f_hist = torch.from_numpy(self.F_files[file_idx_hist][local_idx_hist]).float()
+#             f = torch.cat([f, f_hist[[0,1], :, :]], dim=0)  # Append historical wind speed and direction
         
-        # Apply transforms
-        x = self.tf_x(x)
-        f = self.tf_f(f)
-        mask = f[[2],:,:]
+#         # Apply transforms
+#         x = self.tf_x(x)
+#         f = self.tf_f(f)
+#         mask = f[[2],:,:]
         
-        return x, f, mask
+#         return x, f, mask
     
 
