@@ -95,8 +95,8 @@ def read_2par (readpath='/scratch/jw8736/wavecnn/data/', year=2008, month=1):
 if __name__=='__main__':
     readpath = '/global/homes/j/jiarongw/scratch_folder/wave_data/raw/'
     savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    # savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
-    for year in range(1993,2004):
+    savepath = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
+    for year in range(2024, 2026):
         for month in range(1,13):
             print('Processing year: {}, month: {} ...'.format(year, month))
             

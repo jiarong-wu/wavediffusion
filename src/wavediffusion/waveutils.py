@@ -28,7 +28,7 @@ def plot_sample(x_true, x, f, OPTION=1):
             imgs_sample =[
                 axes[i+1, 0].imshow(x[i][0], vmin=0, vmax=10, cmap='Blues'),
                 axes[i+1, 1].imshow(x[i][1], vmin=0, vmax=15, cmap='pink_r'),
-                axes[i+1, 2].imshow(x[i][2], vmin=0, vmax=360, cmap='twilight_r'),
+                axes[i+1, 2].imshow(x[i][2], vmin=0, vmax=360, cmap='twilight'),
             ]
             axes[i+1, 0].set_ylabel(f"Sample {i}", fontsize=14, rotation=0, labelpad=40)
             cbars = []
@@ -94,7 +94,7 @@ def plot_sample_parts(x_true, x_sample):
     imgs = [
         axes[0, 0].imshow(x_true[0], vmin=0, vmax=10, cmap='Blues'),
         axes[0, 1].imshow(x_true[1], vmin=0, vmax=20, cmap='Reds'),
-        axes[0, 2].imshow(x_true[2], vmin=0, vmax=360, cmap='twilight_r'),
+        axes[0, 2].imshow(x_true[2], vmin=0, vmax=360, cmap='twilight'),
     ]
     axes[0, 0].set_ylabel(f"Truth partition 1", fontsize=14, labelpad=40)
     for j in range(3):
@@ -105,7 +105,7 @@ def plot_sample_parts(x_true, x_sample):
     imgs = [
         axes[1, 0].imshow(x_sample[0], vmin=0, vmax=10, cmap='Blues'),
         axes[1, 1].imshow(x_sample[1], vmin=0, vmax=20, cmap='Reds'),
-        axes[1, 2].imshow(x_sample[2], vmin=0, vmax=360, cmap='twilight_r'),
+        axes[1, 2].imshow(x_sample[2], vmin=0, vmax=360, cmap='twilight'),
     ]
     axes[1, 0].set_ylabel(f"Sampled partition 1", fontsize=14, labelpad=40)
     for j in range(3):
@@ -115,7 +115,7 @@ def plot_sample_parts(x_true, x_sample):
     imgs = [
         axes[2, 0].imshow(x_true[3], vmin=0, vmax=10, cmap='Blues'),
         axes[2, 1].imshow(x_true[4], vmin=0, vmax=20, cmap='Reds'),
-        axes[2, 2].imshow(x_true[5], vmin=0, vmax=360, cmap='twilight_r'),
+        axes[2, 2].imshow(x_true[5], vmin=0, vmax=360, cmap='twilight'),
     ]
     axes[2, 0].set_ylabel(f"Truth partition 2", fontsize=14, labelpad=40)
     for j in range(3):
@@ -125,7 +125,7 @@ def plot_sample_parts(x_true, x_sample):
     imgs = [
         axes[3, 0].imshow(x_sample[3], vmin=0, vmax=10, cmap='Blues'),
         axes[3, 1].imshow(x_sample[4], vmin=0, vmax=20, cmap='Reds'),
-        axes[3, 2].imshow(x_sample[5], vmin=0, vmax=360, cmap='twilight_r'),
+        axes[3, 2].imshow(x_sample[5], vmin=0, vmax=360, cmap='twilight'),
     ]
     axes[3, 0].set_ylabel(f"Sampled partition 2", fontsize=14, labelpad=40)
     for j in range(3):
@@ -394,7 +394,7 @@ def plot_wave(x, label='None'):
     imgs = [
         axes[0].imshow(x[0], vmin=0, vmax=10, cmap='Blues'),
         axes[1].imshow(x[1], vmin=0, vmax=300, cmap='Reds'),
-        axes[2].imshow(x[2], vmin=0, vmax=360, cmap='twilight_r'),
+        axes[2].imshow(x[2], vmin=0, vmax=360, cmap='twilight'),
         axes[3].imshow(x[3], vmin=0, vmax=90, cmap='Grays'),
     ]
     axes[0].set_ylabel(label, fontsize=14, rotation=0, labelpad=40)

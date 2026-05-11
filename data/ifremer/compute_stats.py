@@ -3,7 +3,7 @@
     OPTION = 2: mean for (hs, uss, vss)
     OPTION = 3: mean for (hs_p1, t_p1, theta_p1, hs_p2, t_p2, theta_p2, crossing_sea_criterion)
 '''
-OPTION = 2
+OPTION = 3
 import os
 import numpy as np
 from wavediffusion.wavedata import npyDataResized
@@ -11,11 +11,14 @@ from wavediffusion.wavedata import npyDataResized
 # --- Paths and file lists ---
 if OPTION == 3:
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
+    forcing_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
     train_file_names = [(f'waveparts_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13)] + \
                     [(f'waveparts_2012{i:02d}', f'forcing_2012{i:02d}') for i in range(1, 13)] + \
                     [(f'waveparts_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13)] + \
                     [(f'waveparts_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13)] + \
                     [(f'waveparts_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13)]
+    train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
+                        os.path.join(forcing_file_path, f'{f}.npy')) for x, f in train_file_names]
 elif OPTION == 1 or OPTION == 2:
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
     train_file_names = [(f'wavemean_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13)] + \
@@ -23,10 +26,8 @@ elif OPTION == 1 or OPTION == 2:
                     [(f'wavemean_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13)] + \
                     [(f'wavemean_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13)] + \
                     [(f'wavemean_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13)]
-    train_file_names = [(f'wavemean_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13)] 
-
-train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
-                    os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]
+    train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
+                        os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]
 
 # --- Construct dataset and compute stats ---
 print("Computing dataset statistics... This may take a while.")

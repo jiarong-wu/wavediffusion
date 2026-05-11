@@ -12,6 +12,8 @@ A lightweight diffusion model adopted from [blog-url] for sea state estimation. 
 
 `/script` provides a few script for downloading data, postprocessing, and cluster job scheduling.
 
+A few additional packages needed for data analysis: [roguewavespectrum], [wavespectra].
+
 ## The original smalldiffusion repo
 The core of smalldiffusion depends on the interaction between `data`, `model`
 and `schedule` objects. Here we give a specification of these objects. For a
@@ -125,3 +127,6 @@ Yuan]][arxiv-url].
 [geodiff]:https://arxiv.org/abs/2203.02923
 [iddpm]:https://arxiv.org/abs/2102.09672
 [cfg-paper]:https://arxiv.org/abs/2207.12598
+
+[roguewavespectrum]: https://sofarocean.github.io/oceanwavespectrum/roguewavespectrum.html
+[wavespectra]: https://wavespectra.readthedocs.io/en/latest/

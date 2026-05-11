@@ -28,21 +28,9 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     print(a.state)
     
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    train_file_names = [
-        *( (f'wavemean_2010{i:02d}', f'forcing_2010{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2012{i:02d}', f'forcing_2012{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2016{i:02d}', f'forcing_2016{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2017{i:02d}', f'forcing_2017{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2018{i:02d}', f'forcing_2018{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2019{i:02d}', f'forcing_2019{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2020{i:02d}', f'forcing_2020{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2021{i:02d}', f'forcing_2021{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2022{i:02d}', f'forcing_2022{i:02d}') for i in range(1, 13) ),
-    ]
+    years = list(range(1993, 2004)) + list(range(2005, 2021))
+    # years = list(range(2010, 2023))
+    train_file_names = [*( (f'wavemean_{y:04d}{m:02d}', f'forcing_{y:04d}{m:02d}') for y in years for m in range(1, 13) )]
     train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
                         os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]   
     stats_file = os.path.join(train_file_path, f'stats_OPTION{OPTION}.npz')
@@ -67,7 +55,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         landmaskname=os.path.join(test_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
         meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
-        OPTION=OPITON
+        OPTION=OPTION
     )
 
     loader = DataLoader(train, batch_size=train_batch_size, shuffle=True)
@@ -83,14 +71,14 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     # precond_ch: number of conditional fields
     model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=14, 
                            scale=(train.meanx, train.stdx, train.meanf, train.stdf),
-                           ch_mult=(1, 2, 2), attn_resolutions=(16,))    
+                           ch_mult=(1, 2, 2), attn_resolutions=(16,))
     # model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=4, out_ch=4, ch=256, precond_ch=13, 
     #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
     #                        ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
 
     # Train
-    log_file = open(path + "loss_log.txt", "w")
-    test_log_file = open(path + "test_loss_log.txt", "w")
+    log_file = open(path + "loss_log.txt", "a")
+    test_log_file = open(path + "test_loss_log.txt", "a")
     ema = EMA(model.parameters(), decay=0.999)
     start_epoch = 0
     
@@ -164,8 +152,9 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
+    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}_moredata/'
+    os.makedirs(path, exist_ok=True)
     # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
-    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_8.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_18.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)

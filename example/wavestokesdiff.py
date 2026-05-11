@@ -28,21 +28,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     print(a.state)
     
     train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    train_file_names = [
-        *( (f'wavemean_2010{i:02d}', f'forcing_2010{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2011{i:02d}', f'forcing_2011{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2012{i:02d}', f'forcing_2012{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2013{i:02d}', f'forcing_2013{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2014{i:02d}', f'forcing_2014{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2015{i:02d}', f'forcing_2015{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2016{i:02d}', f'forcing_2016{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2017{i:02d}', f'forcing_2017{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2018{i:02d}', f'forcing_2018{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2019{i:02d}', f'forcing_2019{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2020{i:02d}', f'forcing_2020{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2021{i:02d}', f'forcing_2021{i:02d}') for i in range(1, 13) ),
-        *( (f'wavemean_2022{i:02d}', f'forcing_2022{i:02d}') for i in range(1, 13) ),
-    ]
+    years = list(range(2010, 2021))
+    train_file_names = [*( (f'wavemean_{y:04d}{m:02d}', f'forcing_{y:04d}{m:02d}') for y in years for m in range(1, 13) )]
     train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
                         os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]   
     stats_file = os.path.join(train_file_path, f'stats_OPTION{OPTION}.npz')
@@ -162,7 +149,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
 if __name__=='__main__':
     
     path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}_nohist/'
-    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
-         gradient_accumulation_steps=4)    
-    # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
-    #      weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
+    #      gradient_accumulation_steps=4)    
+    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_4.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)

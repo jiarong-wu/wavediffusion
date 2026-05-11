@@ -152,6 +152,7 @@ class MultiFileNpyData(Dataset):
                 x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
                 n_channels_x = 5
             elif self.OPTION == 3:
+                x_file_proc = x_file.copy()
                 x_file_proc[:, 0, :, :] = np.log1p(x_file_proc[:, 0, :, :])
                 x_file_proc[:, 3, :, :] = np.log1p(x_file_proc[:, 3, :, :]) 
                 n_channels_x = 7

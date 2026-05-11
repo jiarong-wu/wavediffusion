@@ -15,6 +15,13 @@ __pycache__
 *.swp
 *.log
 *.out
+*.png
+*.jpg
+*.pdf
+*.txt
+*.npy
+*.csv
+*.nc
 
 # Project specific
 /build/
@@ -27,3 +34,5 @@ __pycache__
 # data files and resultsc
 /temp/*
 /example/temp/*
+/data/Sofar/*
+/analysis/paper_figure/temp/*
