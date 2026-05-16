@@ -155,4 +155,4 @@ if __name__=='__main__':
     # main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
     main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_6.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+         weights_file=path+'ckpt_10.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=8)

@@ -19,10 +19,11 @@ test_year = 2004
 test_month = 4
 
 n_ensem = 20
-epoch = 4
+epoch = 12
 sigma0 = 100
 model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
 save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
+save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_DDPM_epoch{epoch}_{test_year}{test_month:02d}/'
 os.makedirs(save_path, exist_ok=True)
 
 if OPTION == 1:
@@ -102,7 +103,8 @@ model = a.prepare(model)
 ema.to(a.device)
 
 ############## Define sampling parameters ###########
-schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=sigma0, N=80)
+# schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=sigma0, N=80)
+schedule_infer = ScheduleDDPM()
 
 ############# Sampling function ################
 # sampling from index sample of test set batched (by stacking f)
@@ -159,6 +161,7 @@ def weighted_meanvar(std, mask, w):
 
 x_truth, mean, std = None, None, None
 for index in tqdm(range(0, test.__len__(), 8)):
+# for index in tqdm(range(0, 96, 8)):
     print(f'Sampling for index {index}...')
     x, f, icymask = test.__getitem__(index)
     x = x.unsqueeze(0); f = f.unsqueeze(0); icymask = icymask.unsqueeze(0)
@@ -173,8 +176,14 @@ for index in tqdm(range(0, test.__len__(), 8)):
             x_truth, x_mean, std, rsample = sample (f, x, icymask, xt=None, n_ensem=n_ensem)
     f_ = test.invert_f(f[0]).cpu().numpy()
     # Lower bound the wave period with 0
-    x_mean[1] = np.maximum(x_mean[1], 0)
-    x_truth[1] = np.maximum(x_truth[1], 0)
+    # if OPTION == 1:
+    #     x_mean[1] = np.maximum(x_mean[1], 0)
+    #     x_truth[1] = np.maximum(x_truth[1], 0)
+    # elif OPTION == 3:
+    #     x_mean[1] = np.maximum(x_mean[1], 0)
+    #     x_truth[1] = np.maximum(x_truth[1], 0)  
+    #     x_mean[4] = np.maximum(x_mean[4], 0)
+    #     x_truth[4] = np.maximum(x_truth[4], 0)      
     # Resize icymask from model resolution (320x320) to output resolution (320x720)
     icymask_resized = tf.Resize((320, 720))(icymask[0].float()).numpy()[0] == 1
 

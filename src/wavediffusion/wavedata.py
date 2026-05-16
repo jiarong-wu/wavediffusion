@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as tf
 from pathlib import Path
+from tqdm import tqdm
 
 ''' Data loading and processing classes for wave diffusion model.
     wave mean files have 9 channels: hs, t0m1, dir, spr, uuss, vuss, mssu, mssc, mssd
@@ -52,7 +53,7 @@ class MultiFileNpyData(Dataset):
             f_mmap = np.load(f_path, mmap_mode="r")
             
             self.X_files.append(x_mmap)
-            self.F_files.append(f_mmap[:])  # Load U, V, icymask, dpt, ice 
+            self.F_files.append(f_mmap)  # keep as mmap; avoids loading all years into RAM at init
             
             file_len = len(x_mmap) - 1  # -1 to prevent last sample
             self.file_lengths.append(file_len)
@@ -186,44 +187,44 @@ class MultiFileNpyData(Dataset):
         
         return meanx, stdx, meanf, stdf
     
-    def compute_clim_map(self):
-        """Compute channel-wise mean and std across all files."""           
-        # Get number of total samples
-        n_batch_x = np.array([self.X_files[i].shape[0] for i in range(len(self.X_files))]).sum()
-        n_batch_f = np.array([self.F_files[i].shape[0] for i in range(len(self.F_files))]).sum()
+    def compute_clim_map(self, chunk_size=32):
+        """Compute spatial mean and std across all files, one chunk at a time."""
+        n_batch_x = sum(f.shape[0] for f in self.X_files)
+        n_batch_f = sum(f.shape[0] for f in self.F_files)
 
-        sum_x = np.zeros(self.X_files[0].shape[1:])
-        sum_f = np.zeros(self.F_files[0].shape[1:])
-        sum_sq_x = np.zeros(self.X_files[0].shape[1:])
-        sum_sq_f = np.zeros(self.F_files[0].shape[1:])
-        
-        # Accumulate statistics from each file
-        for x_file, f_file in zip(self.X_files, self.F_files):
-            if self.use_icymask:
-                mask = f_file[:, 2, :, :]  
-                mask_broadcast = mask[:, None, :, :].astype(bool)   
-            else:
-                mask = self.landmask.astype(bool)
-                mask_broadcast = mask[None, None, :, :] 
-            
-            # Apply mask
-            X_masked = x_file * mask_broadcast
-            F_masked = f_file * mask_broadcast
-        
-            # Accumulate sums
-            sum_x += np.nansum(X_masked, axis=(0))
-            sum_f += np.nansum(F_masked, axis=(0))
-            sum_sq_x += np.nansum(X_masked**2 * mask_broadcast, axis=(0))
-            sum_sq_f += np.nansum(F_masked**2 * mask_broadcast, axis=(0))
-        
-        # Calculate mean
-        meanx = sum_x / n_batch_x
-        meanf = sum_f / n_batch_f
-        
-        # Calculate std using accumulated sum of squares
-        stdx = np.sqrt(sum_sq_x / n_batch_x - meanx**2)
-        stdf = np.sqrt(sum_sq_f / n_batch_f - meanf**2)
-        
+        sum_x    = np.zeros(self.X_files[0].shape[1:], dtype=np.float64)
+        sum_f    = np.zeros(self.F_files[0].shape[1:], dtype=np.float64)
+        sum_sq_x = np.zeros(self.X_files[0].shape[1:], dtype=np.float64)
+        sum_sq_f = np.zeros(self.F_files[0].shape[1:], dtype=np.float64)
+
+        for x_file, f_file in tqdm(zip(self.X_files, self.F_files),
+                                   total=len(self.X_files), desc='clim map'):
+            n = x_file.shape[0]
+            for start in range(0, n, chunk_size):
+                end = min(start + chunk_size, n)
+                x_chunk = np.array(x_file[start:end], dtype=np.float32)
+                f_chunk = np.array(f_file[start:end], dtype=np.float32)
+
+                if self.use_icymask:
+                    mask = f_chunk[:, 2:3, :, :].astype(bool)  # N×1×H×W
+                else:
+                    mask = self.landmask[np.newaxis, np.newaxis].astype(bool)  # 1×1×H×W
+
+                x_m = x_chunk * mask
+                f_m = f_chunk * mask
+
+                sum_x    += x_m.sum(0)
+                sum_f    += f_m.sum(0)
+                sum_sq_x += (x_m * x_m).sum(0)
+                sum_sq_f += (f_m * f_m).sum(0)
+
+                del x_chunk, f_chunk, x_m, f_m, mask
+
+        meanx = (sum_x    / n_batch_x).astype(np.float32)
+        meanf = (sum_f    / n_batch_f).astype(np.float32)
+        stdx  = np.sqrt(sum_sq_x / n_batch_x - meanx**2).astype(np.float32)
+        stdf  = np.sqrt(sum_sq_f / n_batch_f - meanf**2).astype(np.float32)
+
         return meanx, stdx, meanf, stdf
     
     def invert_x(self, x):
