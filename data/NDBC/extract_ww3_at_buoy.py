@@ -1,5 +1,5 @@
 """
-Extract WW3 model output at buoy 46042 (36.787 N, 122.408 W) for 2022,
+Extract WW3 model output at a buoy location for a given year,
 and co-locate NDBC directional spectra to the same WW3 timestamps.
 
 Memory-efficient: the buoy grid point is selected immediately after opening
@@ -15,8 +15,10 @@ to the nearest WW3 timestamp. Both are saved in one NetCDF file:
 Run with:
     module load pytorch/2.6.0
     python extract_ww3_at_buoy.py
+    python extract_ww3_at_buoy.py --station 46042 --year 2022 --lat 36.787 --lon -122.408
 """
 
+import argparse
 import sys
 import os
 import xarray as xr
@@ -25,13 +27,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ifremer'))
 from utils import get_top2_indices
 
-RAW_DIR   = '/global/homes/j/jiarongw/scratch_folder/wave_data/raw'
-NDBC_FILE = '/global/homes/j/jiarongw/scratch_folder/wave_data/NDBC/ndbc_directional_46042_2022.nc'
-OUT_FILE  = '/global/homes/j/jiarongw/scratch_folder/wave_data/NDBC/ww3_46042_2022.nc'
-
-BUOY_LAT =  36.787
-BUOY_LON = -122.408
-YEAR     = 2022
+RAW_DIR  = '/global/homes/j/jiarongw/scratch_folder/wave_data/raw'
+NDBC_DIR = '/global/homes/j/jiarongw/scratch_folder/wave_data/NDBC'
 
 MEAN_VARS    = ['hs', 't0m1', 'dir', 'spr']
 PART_VARS    = ['phs0', 'phs1', 'phs2', 'ptp0', 'ptp1', 'ptp2', 'pdir0', 'pdir1', 'pdir2']
@@ -39,7 +36,7 @@ OUT_WW3_VARS = MEAN_VARS + ['hs_p1', 'tp_p1', 'dir_p1', 'hs_p2', 'tp_p2', 'dir_p
 NDBC_VARS    = ['r1', 'r2', 'alpha1', 'alpha2', 'spectral_density']
 
 
-def process_month(fname):
+def process_month(fname, buoy_lat, buoy_lon):
     """Open one monthly WW3 file, select the buoy point, compute partitions.
 
     The spatial selection happens before any data is loaded into memory, so
@@ -48,7 +45,7 @@ def process_month(fname):
     with xr.open_dataset(fname) as ds:
         # Select buoy point while data is still lazy (no global load)
         ds_pt = ds[MEAN_VARS + PART_VARS].sel(
-            latitude=BUOY_LAT, longitude=BUOY_LON, method='nearest'
+            latitude=buoy_lat, longitude=buoy_lon, method='nearest'
         )
         # Load only the tiny time-series into memory
         ds_pt = ds_pt.load()
@@ -60,18 +57,28 @@ def process_month(fname):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Extract WW3 and NDBC data at a buoy location.')
+    parser.add_argument('--station', default='46042', help='NDBC station ID')
+    parser.add_argument('--year',    type=int,   default=2022,     help='Year to process')
+    parser.add_argument('--lat',     type=float, default=36.787,   help='Buoy latitude')
+    parser.add_argument('--lon',     type=float, default=-122.408, help='Buoy longitude')
+    args = parser.parse_args()
+
+    ndbc_file = os.path.join(NDBC_DIR, f'ndbc_directional_{args.station}_{args.year}.nc')
+    out_file  = os.path.join(NDBC_DIR, f'ww3_{args.station}_{args.year}.nc')
+
     # --- Process one month at a time to keep memory low ---
     monthly = []
     for month in range(1, 13):
-        fname = os.path.join(RAW_DIR, f'LOPS_WW3-GLOB-30M_{YEAR:04d}{month:02d}.nc')
+        fname = os.path.join(RAW_DIR, f'LOPS_WW3-GLOB-30M_{args.year:04d}{month:02d}.nc')
         print(f'Processing {os.path.basename(fname)} ...')
-        monthly.append(process_month(fname))
+        monthly.append(process_month(fname, args.lat, args.lon))
 
     ds_ww3 = xr.concat(monthly, dim='time')
 
     # --- Load NDBC data and map to nearest WW3 timestamps ---
     print('Aligning NDBC spectra to WW3 timestamps ...')
-    ds_ndbc = xr.open_dataset(NDBC_FILE)[NDBC_VARS]
+    ds_ndbc = xr.open_dataset(ndbc_file)[NDBC_VARS]
     ds_ndbc_aligned = ds_ndbc.sel(time=ds_ww3.time, method='nearest')
     # Replace NDBC time coord with WW3 time so both share the same axis
     ds_ndbc_aligned['time'] = ds_ww3.time
@@ -79,12 +86,13 @@ def main():
     # --- Merge and save ---
     ds_out = xr.merge([ds_ww3, ds_ndbc_aligned])
     ds_out.attrs['description'] = (
-        f'WW3 LOPS-GLOB-30M hindcast at buoy 46042 (lat={BUOY_LAT}, lon={BUOY_LON}) '
-        f'for {YEAR}. NDBC directional spectra nearest-neighbor mapped to WW3 timestamps.'
+        f'WW3 LOPS-GLOB-30M hindcast at buoy {args.station} '
+        f'(lat={args.lat}, lon={args.lon}) for {args.year}. '
+        f'NDBC directional spectra nearest-neighbor mapped to WW3 timestamps.'
     )
 
-    ds_out.to_netcdf(OUT_FILE)
-    print(f'Saved {OUT_FILE}')
+    ds_out.to_netcdf(out_file)
+    print(f'Saved {out_file}')
     print(ds_out)
 
 

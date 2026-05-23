@@ -1,20 +1,36 @@
 #!/usr/bin/env python3
 """
 Read NDBC directional spectral data and merge r1, r2, alpha1, alpha2, and spectral density.
-Save to file ndbc_directional_{station}_{year}.nc. The output dataset has dimensions (time, frequency) and variables
-r1, r2, alpha1, alpha2, spectral_density.
+Save to ndbc_directional_{station}_{year}.nc with dimensions (time, frequency).
 
-This script expects files for the same station and year with suffixes:
-- j: r1 direction
-- k: r2 direction
-- d: alpha1 direction
-- i: alpha2 direction
-- w: spectral density
+Input files
+-----------
+Five per-station per-year text files are required, identified by their single-letter suffix:
+  j  -> r1               (mean direction first Fourier coefficient)
+  k  -> r2               (mean direction second Fourier coefficient)
+  d  -> alpha1           (principal direction, first Fourier coefficient)
+  i  -> alpha2           (principal direction, second Fourier coefficient)
+  w  -> spectral_density (variance density, m^2/Hz)
 
-Example:
-  python read_ndbc_directional.py --station 46042 --year 2022 --input-dir /path/to/buoy
-  
-NOTE: It seems that the 2004 data files have different convention.
+File format compatibility
+-------------------------
+Two header formats are supported:
+
+  New (2005+):  #YY  MM DD hh mm  <freq1>  <freq2> ...
+                5 time columns; year prefixed with '#'.
+
+  Old (<=2004): YYYY MM DD hh  <freq1>  <freq2> ...
+                4 time columns (no minutes); year column named 'YYYY'.
+
+The parser detects the number of time columns automatically by finding the first
+column whose name parses as a float in (0, 1) Hz, so it is robust to either format.
+Missing minute values (old format) are filled with 0.
+
+Usage
+-----
+  module load pytorch/2.6.0
+  python read_ndbc_directional.py --station 46042 --year 2022 --input-dir /path/to/data/
+  python read_ndbc_directional.py --station 46042 --year 2004 --input-dir /path/to/data/
 """
 
 from __future__ import annotations
@@ -37,8 +53,23 @@ SUFFIX_TO_VAR = {
 NA_VALUES = ["MM", "99", "99.0", "999", "999.0", "9999", "9999.0"]
 
 
+def _is_frequency(s: str) -> bool:
+    """Return True if s looks like a frequency bin label (float in Hz range)."""
+    try:
+        return 0.0 < float(s) < 1.0
+    except ValueError:
+        return False
+
+
 def parse_ndbc_file(path: Path) -> tuple[pd.DatetimeIndex, np.ndarray, np.ndarray]:
-    """Read one NDBC spectral/directional file and return time index, frequency vector, and values."""
+    """Read one NDBC spectral/directional file.
+
+    Returns
+    -------
+    times : pd.DatetimeIndex
+    frequencies : np.ndarray, shape (n_freq,)  — frequency bins in Hz
+    values : np.ndarray, shape (n_time, n_freq) — spectral/directional values
+    """
     with path.open("r", encoding="utf-8") as f:
         header = f.readline().strip()
 
@@ -60,28 +91,55 @@ def parse_ndbc_file(path: Path) -> tuple[pd.DatetimeIndex, np.ndarray, np.ndarra
         dtype=float,
     )
 
-    df = df.rename(columns={"YY": "year", "MM": "month", "DD": "day", "hh": "hour", "mm": "minute"})
+    df = df.rename(columns={"YY": "year", "YYYY": "year",
+                             "MM": "month", "DD": "day", "hh": "hour", "mm": "minute"})
     df["year"] = df["year"].astype(int)
     df["month"] = df["month"].astype(int)
     df["day"] = df["day"].astype(int)
     df["hour"] = df["hour"].astype(int)
-    df["minute"] = df["minute"].astype(int)
+    # Older files (e.g. 2004) have no minutes column; default to 0
+    if "minute" not in df.columns:
+        df["minute"] = 0
+    else:
+        df["minute"] = df["minute"].astype(int)
 
     times = pd.to_datetime(
         df[["year", "month", "day", "hour", "minute"]], format="%Y %m %d %H %M"
     )
 
-    freq_cols = [c for c in col_names[5:] if c not in {"year", "MM", "DD", "hh", "mm"}]
+    # Detect where frequency columns start: first col_name parseable as a float in (0, 1) Hz
+    n_time_cols = next(
+        i for i, c in enumerate(col_names)
+        if _is_frequency(c)
+    )
+    freq_cols = col_names[n_time_cols:]
     frequencies = np.array([float(c) for c in freq_cols], dtype=float)
     values = df[freq_cols].to_numpy(dtype=float)
     return times, frequencies, values
 
 
 def build_dataset(input_dir: Path, station: str, year: int) -> xr.Dataset:
-    """Build an xarray dataset containing r1, r2, alpha1, alpha2, and spectral density."""
-    data_vars = {}
+    """Read all five suffix files and merge into one xarray Dataset.
+
+    Files for different variables may have different frequency grids (notably
+    the old <=2004 format where the spectral density file covers a wider range
+    than the directional files). All variables are trimmed to their common
+    frequency intersection before merging.
+
+    Parameters
+    ----------
+    input_dir : Path  — directory containing the NDBC text files
+    station   : str   — NDBC station ID (e.g. '46042')
+    year      : int   — year to read
+
+    Returns
+    -------
+    xr.Dataset with dims (time, frequency) and variables r1, r2, alpha1, alpha2,
+    spectral_density.
+    """
+    # Collect all parsed data first, then align to common frequency grid
+    parsed = {}
     time_index = None
-    frequency_coord = None
 
     for suffix, var_name in SUFFIX_TO_VAR.items():
         filename = f"{station}{suffix}{year}.txt"
@@ -96,18 +154,24 @@ def build_dataset(input_dir: Path, station: str, year: int) -> xr.Dataset:
         elif not np.array_equal(time_index.values, times.values):
             raise ValueError(f"Time coordinates do not match in file {path}")
 
-        if frequency_coord is None:
-            frequency_coord = frequencies
-        elif not np.allclose(frequency_coord, frequencies):
-            raise ValueError(f"Frequency coordinates do not match in file {path}")
+        parsed[var_name] = (frequencies, values)
 
-        data_vars[var_name] = (("time", "frequency"), values)
+    # Find common frequency grid (intersection), rounding to avoid float precision issues
+    all_freqs = [np.round(freqs, 6) for freqs, _ in parsed.values()]
+    common_freqs = all_freqs[0]
+    for f in all_freqs[1:]:
+        common_freqs = np.intersect1d(common_freqs, f)
+
+    data_vars = {}
+    for var_name, (frequencies, values) in parsed.items():
+        mask = np.isin(np.round(frequencies, 6), common_freqs)
+        data_vars[var_name] = (("time", "frequency"), values[:, mask])
 
     ds = xr.Dataset(
         data_vars,
         coords={
             "time": time_index,
-            "frequency": frequency_coord,
+            "frequency": common_freqs,
         },
     )
     ds["frequency"].attrs["units"] = "Hz"

@@ -1,24 +1,40 @@
 '''
-Reconstruct wave partitions from NDBC buoy WW3 spectra using MEM2 (from roguewavespectrum package), 
-then compute partition stats hs, tp (tm01), dm (from wavespectra package) and save to a new NetCDF file 
+Reconstruct wave partitions from NDBC buoy WW3 spectra using MEM2 (from roguewavespectrum package),
+then compute partition stats hs, tp (tm01), dm (from wavespectra package) and save to a new NetCDF file
 together with the original WW3 data, both in descending energy order between two partitions.
   - NDBC (time, part): hs, tp, dm
   - WW3  (time, part): hs_m, tp_m, dm_m
 
 Run with:
-    module load python/2.6.0
-    python extract_ww3_at_buoy.py
-    python reconstruct_partition.py
+    module load pytorch/2.6.0
+    python buoy_reconstruct_partition.py
+    python buoy_reconstruct_partition.py --input /path/to/ww3_46042_2022.nc
+    python buoy_reconstruct_partition.py --input-dir /path/to/NDBC/ --station 46042 --year 2022
 '''
 
+import argparse
+import os
 import numpy as np
 import xarray as xr
 from roguewavespectrum import Spectrum
 import wavespectra
 
-INPUT = "/pscratch/sd/j/jiarongw/wave_data/NDBC/ww3_46042_2022.nc"
-OUTPUT = "/pscratch/sd/j/jiarongw/wave_data/NDBC/ww3_buoy_partitioned_46042_2022.nc"
-N_PARTS = 2
+NDBC_DIR = '/global/homes/j/jiarongw/scratch_folder/wave_data/NDBC'
+N_PARTS  = 2
+
+parser = argparse.ArgumentParser(description='Reconstruct buoy wave partitions from WW3+NDBC spectra.')
+parser.add_argument('--input',     default=None, help='Input NetCDF file (overrides --input-dir/--station/--year)')
+parser.add_argument('--input-dir', default=NDBC_DIR, help='Directory containing the input NetCDF file')
+parser.add_argument('--station',   default='46042', help='NDBC station ID')
+parser.add_argument('--year',      type=int, default=2022, help='Year')
+args = parser.parse_args()
+
+if args.input:
+    INPUT  = args.input
+    OUTPUT = os.path.splitext(args.input)[0] + '_partitioned.nc'
+else:
+    INPUT  = os.path.join(args.input_dir, f'ww3_{args.station}_{args.year}.nc')
+    OUTPUT = os.path.join(args.input_dir, f'ww3_buoy_partitioned_{args.station}_{args.year}.nc')
 
 ds = xr.open_dataset(INPUT)
 

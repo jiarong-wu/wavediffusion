@@ -119,26 +119,37 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
 
         # ---- epoch-based triggers ----
         if ns.epoch != last_epoch:
-            last_epoch = ns.epoch
-            a.wait_for_everyone()
-            
-            # ---- checkpoint ----
-            if ns.epoch % ckpt_everyn_epoch == 0:
-                a.wait_for_everyone()
-                if a.is_main_process:
-                    print('Saving checkpoint... at epoch ', ns.epoch)
-                    a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": ns.epoch},
-                            path + f"ckpt_{ns.epoch}.pt")
+            # last_epoch just finished — save its checkpoint before moving on
+            if last_epoch >= 0:
                 a.wait_for_everyone()
 
-            # ---- sampling ----
-            if ns.epoch % sample_everyn_epoch == 0:
-                a.wait_for_everyone()
-                if a.is_main_process:
-                    print('Sampling... at epoch ', ns.epoch)
-                    sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size, 
-                                    test=test, filename=f"sample_epoch{ns.epoch}", OPTION=OPTION)
-                a.wait_for_everyone()
+                # ---- checkpoint ----
+                if last_epoch % ckpt_everyn_epoch == 0:
+                    if a.is_main_process:
+                        print('Saving checkpoint... at epoch ', last_epoch)
+                        a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": last_epoch},
+                                path + f"ckpt_{last_epoch}.pt")
+                    a.wait_for_everyone()
+
+                # ---- sampling ----
+                if last_epoch % sample_everyn_epoch == 0:
+                    if a.is_main_process:
+                        print('Sampling... at epoch ', last_epoch)
+                        sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size,
+                                        test=test, filename=f"sample_epoch{last_epoch}", OPTION=OPTION)
+                    a.wait_for_everyone()
+
+            last_epoch = ns.epoch
+
+    # Save final checkpoint after all epochs complete (the loop only saves at epoch starts,
+    # so the last epoch's training would otherwise be lost)
+    final_epoch = start_epoch + epochs
+    a.wait_for_everyone()
+    if a.is_main_process:
+        print(f'Saving final checkpoint at epoch {final_epoch}')
+        a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": final_epoch},
+                path + f"ckpt_{final_epoch}.pt")
+    a.wait_for_everyone()
 
     log_file.close()
     test_log_file.close()
@@ -150,9 +161,10 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
+    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/resume/'
     os.makedirs(path, exist_ok=True)
     # main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=2, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
-    main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_10.pt', ckpt_everyn_epoch=2, sample_everyn_epoch=1, gradient_accumulation_steps=8)
+    main(path, train_batch_size=4, epochs=1, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_10.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
+         gradient_accumulation_steps=4)

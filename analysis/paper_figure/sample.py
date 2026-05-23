@@ -15,16 +15,30 @@ from tqdm import tqdm
 
 OPTION = 3
 HIST = True
+MONTHLY = True
 test_year = 2004
 test_month = 4
 
-n_ensem = 20
-epoch = 12
+n_ensem = 10
+epoch = 10
 sigma0 = 100
-model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
-save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
-save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_DDPM_epoch{epoch}_{test_year}{test_month:02d}/'
+steps = 20 
+model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/resume/'
+save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/checks/'
 os.makedirs(save_path, exist_ok=True)
+
+# OPTION = 3
+# HIST = True
+# MONTHLY = False
+# test_year = 2004
+
+# n_ensem = 20
+# epoch = 10
+# sigma0 = 100
+# steps = 20
+# model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
+# save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_sigma{sigma0}_epoch{epoch}_{test_year}/'
+# os.makedirs(save_path, exist_ok=True)
 
 if OPTION == 1:
     var_names = ['hs', 'tp', 'thetap']
@@ -37,13 +51,19 @@ elif OPTION == 3:
 if OPTION == 1 or OPTION == 2:
     test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
     # test_file_names = [*( (f'wave_2004{i:02d}', f'forcing_2004{i:02d}') for i in range(1, 13) )]
-    test_file_names = [('wavemean_200404', 'forcing_200404')]
+    if MONTHLY:
+        test_file_names = [(f'wavemean_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}')]
+    else:
+        test_file_names = [(f'wavemean_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}') for month in range(1, 13)]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
                        os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
 elif OPTION == 3:
     test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
     forcing_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    test_file_names = [('waveparts_200404', 'forcing_200404')]
+    if MONTHLY:
+        test_file_names = [(f'waveparts_{test_year}{test_month:02d}', f'forcing_{test_year}{test_month:02d}')]
+    else:
+        test_file_names = [(f'waveparts_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}') for month in range(1, 13)]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
                        os.path.join(forcing_file_path, f'{f}.npy')) for x, f in test_file_names]
 stats_file = os.path.join(test_file_path, f'stats_OPTION{OPTION}.npz')
@@ -103,8 +123,8 @@ model = a.prepare(model)
 ema.to(a.device)
 
 ############## Define sampling parameters ###########
-# schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=sigma0, N=80)
-schedule_infer = ScheduleDDPM()
+schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=sigma0, N=80)
+# schedule_infer = ScheduleDDPM()
 
 ############# Sampling function ################
 # sampling from index sample of test set batched (by stacking f)
@@ -121,10 +141,10 @@ def sample (f, x, mask, xt=None, n_ensem=10):
     with ema.average_parameters():
         if GUIDED:
             hs_thres = -test.meanx[0]/test.stdx[0]
-            *xt, x0 = samples_thres(model, schedule_infer.sample_sigmas(40), gam=1, mu=0.5, batchsize=n_ensem, 
+            *xt, x0 = samples_thres(model, schedule_infer.sample_sigmas(steps), gam=1, mu=0.5, batchsize=n_ensem, 
                                     thres=hs_thres, accelerator=a, cond=f, mask=mask, xt=xt)
         else:
-            *xt, x0 = samples(model, schedule_infer.sample_sigmas(40), gam=1, mu=0.5, batchsize=n_ensem,
+            *xt, x0 = samples(model, schedule_infer.sample_sigmas(steps), gam=1, mu=0.5, batchsize=n_ensem,
                               accelerator=a, cond=f, mask=mask, xt=xt)
         # This operation hasn't been broadcasted
         for i in range(0, n_ensem):
@@ -170,7 +190,7 @@ for index in tqdm(range(0, test.__len__(), 8)):
     else:
         if USING_PRE:
             # To make dimension consistent transform mean
-            xt = test.transform_x(torch.tensor(mean).to(a.device)) + schedule_infer.sample_sigmas(40)[0].to(a.device) * torch.randn(model.input_dims).to(a.device)
+            xt = test.transform_x(torch.tensor(mean).to(a.device)) + schedule_infer.sample_sigmas(steps)[0].to(a.device) * torch.randn(model.input_dims).to(a.device)
             x_truth, x_mean, std, rsample = sample (f, x, icymask, xt=xt, n_ensem=n_ensem)
         else:
             x_truth, x_mean, std, rsample = sample (f, x, icymask, xt=None, n_ensem=n_ensem)
