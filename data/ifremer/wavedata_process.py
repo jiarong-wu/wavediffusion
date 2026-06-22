@@ -1,6 +1,6 @@
 import xarray as xr
 import numpy as np
-from utils import get_top2_indices
+from wavediffusion.waveutils import get_top2_indices
 
 ''' Save the mean quantities from monthly raw data to .npy files. '''
 def read_mean (readpath='/scratch/jw8736/wavecnn/data/', year=2008, month=1):

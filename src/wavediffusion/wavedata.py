@@ -467,6 +467,91 @@ class npyDataWndHist(npyDataResized):
         
         return x, f, icymask
     
+### With wind history.
+class npyDataWndHistNew(npyDataResized):
+    def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month
+        landmaskname=None, use_icymask=True,
+        compute_stats=True,
+        meanx=None, stdx=None, meanf=None, stdf=None,
+        resize_x=None, resize_f=None, OPTION=1):
+        super().__init__(
+            file_list, landmaskname, use_icymask,
+            compute_stats, meanx, stdx, meanf, stdf, OPTION)
+        # Master class initiation ...
+        # Expand scaling for wind history (add 2 more channels)
+        for i in range(0,5):
+            self.meanf = torch.cat([self.meanf, self.meanf[0:2]], dim=0)
+        for i in range(0,5):
+            self.stdf = torch.cat([self.stdf, self.stdf[0:2]], dim=0)
+        
+        self.tf_x = tf.Compose([
+            FillNaN(0.0),
+            tf.Resize(resize_x),
+            tf.Normalize(self.meanx.tolist(), self.stdx.tolist()),
+            Mask(self.landmask_resized)
+        ])
+        self.tf_f = tf.Compose([
+            FillNaN(0.0),
+            tf.Resize(resize_f),
+            tf.Normalize(self.meanf.tolist(), self.stdf.tolist()),
+            Mask(self.landmask_resized)
+        ])
+        # Inverse transforms
+        self.inv_tf_x = tf.Compose([
+            tf.Resize((self.original_H, self.original_W)),
+            tf.Normalize(mean=[0]*len(self.meanx), std=(1/self.stdx).tolist()),
+            tf.Normalize(mean=(-self.meanx).tolist(), std=[1]*len(self.stdx)),
+            Mask(self.landmask_original)
+        ])
+        self.inv_tf_f = tf.Compose([
+            tf.Resize((self.original_H, self.original_W)),
+            tf.Normalize(mean=[0]*len(self.meanf), std=(1/self.stdf).tolist()),
+            tf.Normalize(mean=(-self.meanf).tolist(), std=[1]*len(self.stdf)),
+            Mask(self.landmask_original)
+        ])
+    
+    def __len__(self):
+        return self.total_length - 80
+    
+    def __getitem__(self, idx):
+        """Get item by global index - automatically finds correct file."""
+        # Map global index to file and local index
+        file_idx, local_idx = self._get_file_and_local_idx(idx + 80)
+
+        if self.OPTION == 1:
+            x_raw = self.X_files[file_idx][local_idx][[0,1,2]] # height, period, direction
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+
+        if self.OPTION == 2:
+            x_raw = self.X_files[file_idx][local_idx][[0,4,5,6,7]]
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+            
+        if self.OPTION == 3:
+            x_raw = self.X_files[file_idx][local_idx]
+            x = torch.from_numpy(x_raw).float().clone()
+            x[0] = torch.log1p(x[0]) 
+            x[3] = torch.log1p(x[3])
+            f = torch.from_numpy(self.F_files[file_idx][local_idx][[0,1,3,4]]).float()
+            icymask = torch.from_numpy(self.F_files[file_idx][local_idx][[2]]).float()
+            
+        for i in range(16, 96, 16):
+            file_idx_hist, local_idx_hist = self._get_file_and_local_idx(idx + i)
+            f_hist = torch.from_numpy(self.F_files[file_idx_hist][local_idx_hist]).float()
+            f = torch.cat([f, f_hist[[0,1], :, :]], dim=0)  # Append historical wind speed and direction
+        
+        # Apply transforms
+        x = self.tf_x(x)
+        f = self.tf_f(f)
+        icymask = self.tf_icymask(icymask)
+        
+        return x, f, icymask
+    
     
 # class npyDataWndHistDaily(npyDataResized):
 #     def __init__(self, file_list,  # List of tuples: [(Xname, Fname), ...] for each month

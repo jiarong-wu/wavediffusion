@@ -16,7 +16,7 @@ def add_lat_lon (fields, fieldnames):
     return ds
 
 ''' Compute gradient '''
-def assemble (hs, lp, theta, wnd, ice):
+def assemble (hs, tp, theta, wnd, ice):
 
     global lat_deg, lon_deg    
     deg2rad = np.pi / 180.0
@@ -28,7 +28,7 @@ def assemble (hs, lp, theta, wnd, ice):
     
     wave = xr.Dataset({
         'hs': (('lat', 'lon'), hs),
-        'lp': (('lat', 'lon'), lp),
+        'tp': (('lat', 'lon'), tp),
         'theta': (('lat', 'lon'), theta),
         'wnd': (('lat', 'lon'), wnd),
         'ux': (('lat', 'lon'), ux),
@@ -49,9 +49,9 @@ def assemble (hs, lp, theta, wnd, ice):
         
     # Project onto theta direction
     wave['grad'] = dhs_dx * ux + dhs_dy * uy
-    wave['slope'] = np.pi**2 * wave.hs / 9.8 / (wave.lp/1.56)
-    wave['hs_hat'] = 9.8 * wave.hs / wave.wnd ** 2
-    wave['tp_hat'] = 9.8 * (wave.lp/1.56) ** 0.5 / (2 * np.pi * wave.wnd)
+    wave['slope'] = np.pi**2 * wave.hs / 9.8 / wave.tp**2
+    wave['hs_hat'] = 9.8 * wave.hs / (wave.wnd) ** 2
+    wave['tp_hat'] = 9.8 * wave.tp / (2 * np.pi * (wave.wnd))
 
     return wave
 

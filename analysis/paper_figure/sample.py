@@ -7,38 +7,63 @@ from torch.utils.data import DataLoader
 from torch_ema import ExponentialMovingAverage as EMA
 from wavediffusion.diffusion import ScheduleLogLinear, ScheduleDDPM, samples, samples_thres
 from accelerate import Accelerator
+import contextlib
 import torch
+import time
 import numpy as np
 import os
 from torchvision import transforms as tf
 from tqdm import tqdm
 
-OPTION = 3
-HIST = True
-MONTHLY = True
-test_year = 2004
-test_month = 4
+############### monthly ##################
+# OPTION = 1
+# label = '_moredata'
+# HIST = True
+# MONTHLY = True
+# test_year = 2004
+# test_month = 9
 
-n_ensem = 10
-epoch = 10
-sigma0 = 100
-steps = 20 
-model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/resume/'
-save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/checks/'
-os.makedirs(save_path, exist_ok=True)
+# OPTION = 2
+# label = '_nohist'
+# label = ''
+# HIST = True
+# MONTHLY = True
+# test_year = 2004
+# test_month = 9
 
 # OPTION = 3
+# label = ''
 # HIST = True
-# MONTHLY = False
+# MONTHLY = True
 # test_year = 2004
+# test_month = 4
 
 # n_ensem = 20
-# epoch = 10
+# epoch = 11
 # sigma0 = 100
-# steps = 20
-# model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}/'
-# save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}_sigma{sigma0}_epoch{epoch}_{test_year}/'
+# steps = 40
+# MIXED_PRECISION = False
+# model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
+# save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
 # os.makedirs(save_path, exist_ok=True)
+
+############### A whole year ##################
+OPTION = 2
+label = '_moredata'
+label = '_nohist'
+HIST = False
+MONTHLY = False
+test_year = 2004
+every_n = 40 # Sampling time interval, 8 is daily, 40 is 5-day interval
+
+n_ensem = 20
+epoch = 8
+sigma0 = 100
+steps = 40
+MIXED_PRECISION = False
+model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
+save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}/'
+os.makedirs(save_path, exist_ok=True)
 
 if OPTION == 1:
     var_names = ['hs', 'tp', 'thetap']
@@ -52,7 +77,7 @@ if OPTION == 1 or OPTION == 2:
     test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
     # test_file_names = [*( (f'wave_2004{i:02d}', f'forcing_2004{i:02d}') for i in range(1, 13) )]
     if MONTHLY:
-        test_file_names = [(f'wavemean_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}')]
+        test_file_names = [(f'wavemean_{test_year}{test_month:02d}', f'forcing_{test_year}{test_month:02d}')]
     else:
         test_file_names = [(f'wavemean_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}') for month in range(1, 13)]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
@@ -138,19 +163,27 @@ def sample (f, x, mask, xt=None, n_ensem=10):
     if xt is None:
         print("Start with no history snapshot.")
     x0_ensem = []
-    with ema.average_parameters():
+    amp_ctx = torch.autocast(device_type=a.device.type, dtype=torch.float16) if MIXED_PRECISION else contextlib.nullcontext()
+    with ema.average_parameters(), amp_ctx:
         if GUIDED:
             hs_thres = -test.meanx[0]/test.stdx[0]
-            *xt, x0 = samples_thres(model, schedule_infer.sample_sigmas(steps), gam=1, mu=0.5, batchsize=n_ensem, 
+            t0 = time.perf_counter()
+            *xt, x0 = samples_thres(model, schedule_infer.sample_sigmas(steps), gam=1, mu=0.5, batchsize=n_ensem,
                                     thres=hs_thres, accelerator=a, cond=f, mask=mask, xt=xt)
         else:
+            t0 = time.perf_counter()
             *xt, x0 = samples(model, schedule_infer.sample_sigmas(steps), gam=1, mu=0.5, batchsize=n_ensem,
                               accelerator=a, cond=f, mask=mask, xt=xt)
+        if a.device.type == 'cuda':
+            torch.cuda.synchronize()
+        t1 = time.perf_counter()
         # This operation hasn't been broadcasted
         for i in range(0, n_ensem):
             x_ = test.invert_x(x0[i])
             x_ = x_ * tf.Resize((320,720))(mask[0].to(x_))
             x0_ensem.append(x_.cpu().numpy())
+        t2 = time.perf_counter()
+        print(f'[timing] diffusion sampling: {t1-t0:.2f}s  |  postprocess ({n_ensem} members): {t2-t1:.2f}s')
     
     x_truth = test.invert_x(x[0]) * tf.Resize((320,720))(mask[0].to(x[0]))
     x_truth = x_truth.cpu().numpy()
@@ -180,7 +213,7 @@ def weighted_meanvar(std, mask, w):
     return np.sum(var[mask] * w[mask]) / np.sum(w[mask])    
 
 x_truth, mean, std = None, None, None
-for index in tqdm(range(0, test.__len__(), 8)):
+for index in tqdm(range(0, test.__len__(), every_n)):
 # for index in tqdm(range(0, 96, 8)):
     print(f'Sampling for index {index}...')
     x, f, icymask = test.__getitem__(index)
@@ -205,7 +238,7 @@ for index in tqdm(range(0, test.__len__(), 8)):
     #     x_mean[4] = np.maximum(x_mean[4], 0)
     #     x_truth[4] = np.maximum(x_truth[4], 0)      
     # Resize icymask from model resolution (320x320) to output resolution (320x720)
-    icymask_resized = tf.Resize((320, 720))(icymask[0].float()).numpy()[0] == 1
+    icymask_resized = tf.Resize((320, 720))(icymask[0].float()).numpy()[0] > 0.9
 
     np.save(f'{save_path}sample_{index}.npy', rsample)
     np.save(f'{save_path}mean_{index}.npy', x_mean)
