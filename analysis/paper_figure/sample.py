@@ -31,39 +31,41 @@ from tqdm import tqdm
 # test_year = 2004
 # test_month = 9
 
-# OPTION = 3
-# label = ''
-# HIST = True
-# MONTHLY = True
-# test_year = 2004
-# test_month = 4
-
-# n_ensem = 20
-# epoch = 11
-# sigma0 = 100
-# steps = 40
-# MIXED_PRECISION = False
-# model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
-# save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
-# os.makedirs(save_path, exist_ok=True)
-
-############### A whole year ##################
-OPTION = 2
-label = '_moredata'
-label = '_nohist'
-HIST = False
-MONTHLY = False
+OPTION = 3
+label = '_continuous'
+HIST = True
+MONTHLY = True
 test_year = 2004
-every_n = 40 # Sampling time interval, 8 is daily, 40 is 5-day interval
+test_month = 4
+every_n = 8 # Sampling time interval, 8 is daily, 40 is 5-day interval
 
 n_ensem = 20
-epoch = 8
+epoch = 6
 sigma0 = 100
 steps = 40
 MIXED_PRECISION = False
 model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
-save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}/'
+save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
 os.makedirs(save_path, exist_ok=True)
+
+############### A whole year ##################
+# OPTION = 3
+# label = '_moredata'
+# label = '_nohist'
+# label = '_continuous'
+# HIST = True
+# MONTHLY = False
+# test_year = 2004
+# every_n = 40 # Sampling time interval, 8 is daily, 40 is 5-day interval
+
+# n_ensem = 20
+# epoch = 6
+# sigma0 = 100
+# steps = 40
+# MIXED_PRECISION = False
+# model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
+# save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}/'
+# os.makedirs(save_path, exist_ok=True)
 
 if OPTION == 1:
     var_names = ['hs', 'tp', 'thetap']

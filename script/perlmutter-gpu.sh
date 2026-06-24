@@ -2,7 +2,7 @@
 
 #SBATCH --nodes=1
 #SBATCH --qos=regular
-#SBATCH --time=18:00:00
+#SBATCH --time=14:00:00
 #SBATCH --constraint=gpu
 #SBATCH --gpus=4
 #SBATCH --account=m4874

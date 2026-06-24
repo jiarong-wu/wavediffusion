@@ -163,8 +163,8 @@ if __name__=='__main__':
     
     path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}_continuous/'
     os.makedirs(path, exist_ok=True)
-    main(path, train_batch_size=4, epochs=6, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
-         gradient_accumulation_steps=4)    
-    # main(path, train_batch_size=4, epochs=1, sample_batch_size=2, RESUME=True,
-    #      weights_file=path+'ckpt_10.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
-    #      gradient_accumulation_steps=4)
+    # main(path, train_batch_size=4, epochs=6, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
+    #      gradient_accumulation_steps=4)    
+    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_6.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
+         gradient_accumulation_steps=4)
