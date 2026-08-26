@@ -16,12 +16,13 @@ from torchvision import transforms as tf
 from tqdm import tqdm
 
 ############### monthly ##################
-# OPTION = 1
-# label = '_moredata'
-# HIST = True
-# MONTHLY = True
-# test_year = 2004
-# test_month = 9
+OPTION = 1
+label = '_periodic'
+HIST = True
+MONTHLY = True
+test_year = 2004
+test_month = 4
+every_n = 8
 
 # OPTION = 2
 # label = '_nohist'
@@ -31,18 +32,18 @@ from tqdm import tqdm
 # test_year = 2004
 # test_month = 9
 
-OPTION = 3
-label = '_continuous'
-HIST = True
-MONTHLY = True
-test_year = 2004
-test_month = 4
-every_n = 8 # Sampling time interval, 8 is daily, 40 is 5-day interval
+# OPTION = 3
+# label = '_continuous'
+# HIST = True
+# MONTHLY = True
+# test_year = 2004
+# test_month = 4
+# every_n = 8 # Sampling time interval, 8 is daily, 40 is 5-day interval
 
-n_ensem = 20
+n_ensem = 1
 epoch = 6
 sigma0 = 100
-steps = 40
+steps = 10
 MIXED_PRECISION = False
 model_path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}{label}/'
 save_path = f'/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION{OPTION}{label}_sigma{sigma0}_epoch{epoch}_{test_year}{test_month:02d}/'
@@ -123,9 +124,9 @@ USING_PRE = False # If using previous mean as initialization for sampling
 
 weights_file = model_path + f'ckpt_{epoch}.pt'
 if OPTION == 1:
-    model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=14, 
+    model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=14,
                        scale=(test.meanx, test.stdx, test.meanf, test.stdf),
-                       ch_mult=(1, 2, 2), attn_resolutions=(16,))
+                       ch_mult=(1, 2, 2), attn_resolutions=(16,), periodic=True)
 elif OPTION == 2:
     if HIST:
         model = Scaled(myUnet)(in_dim=320, in_ch=5, out_ch=5, ch=256, precond_ch=14, 

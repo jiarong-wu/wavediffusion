@@ -1,5 +1,4 @@
-''' Train diffusion model to predict the mean. '''
-
+''' Train diffusion model to predict the partitions. '''
 import numpy as np
 import os
 import torch
@@ -16,9 +15,7 @@ from wavediffusion.wavedata import npyDataWndHist
 from wavediffusion.diffusion import ScheduleLogLinear, ScheduleDDPM, samples, masked_training_loop
 
 from wavediffusion.waveutils import evaluate, sample_and_save
-
-OPTION = 1
-
+OPTION = 3
 ### TODO: refine this to reuse mean and std stats from model reload. And multi-GPU case for computing dataset stats
 def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=False, weights_file=None,
          ckpt_everyn_epoch=1, sample_everyn_epoch=1, eval_everyn_step=100, gradient_accumulation_steps=4):
@@ -27,52 +24,53 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     a = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=gradient_accumulation_steps)
     print(a.state)
     
-    train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    years = list(range(1995, 2004)) + list(range(2005, 2021))
+    train_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
+    forcing_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
+    years = list(range(1993, 2018))
     # years = list(range(2010, 2023))
-    train_file_names = [*( (f'wavemean_{y:04d}{m:02d}', f'forcing_{y:04d}{m:02d}') for y in years for m in range(1, 13) )]
+    train_file_names = [*( (f'waveparts_{y:04d}{m:02d}', f'forcing_{y:04d}{m:02d}') for y in years for m in range(1, 13) )]
     train_file_list = [(os.path.join(train_file_path, f'{x}.npy'), 
-                        os.path.join(train_file_path, f'{f}.npy')) for x, f in train_file_names]   
+                        os.path.join(forcing_file_path, f'{f}.npy')) for x, f in train_file_names]   
     stats_file = os.path.join(train_file_path, f'stats_OPTION{OPTION}.npz')
     stats = np.load(stats_file)
     meanx, stdx = stats['meanx'], stats['stdx']
     meanf, stdf = stats['meanf'], stats['stdf']
     train = npyDataWndHist(
         train_file_list,
-        resize_x=(320,320), resize_f=(320,320),
+        resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(train_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
         meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
-        OPTION=OPTION, hist_duration_days=10, hist_freq_days=2
+        OPTION=OPTION
     )
-    test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    test_file_names = [('wavemean_200404', 'forcing_200404')]
+    test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
+    test_file_names = [('waveparts_201904', 'forcing_201904')]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
-                       os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
+                       os.path.join(forcing_file_path, f'{f}.npy')) for x, f in test_file_names]
     test = npyDataWndHist(
         test_file_list,
-        resize_x=(320,320), resize_f=(320,320),
+        resize_x=(320,320), resize_f=(320,320), 
         landmaskname=os.path.join(test_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
         meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
-        OPTION=OPTION, hist_duration_days=10, hist_freq_days=2
+        OPTION=OPTION
     )
 
     loader = DataLoader(train, batch_size=train_batch_size, shuffle=True)
     loader_test = DataLoader(test, batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training  
 
     schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
-    # schedule_train = ScheduleLogLinear(sigma_min=80, sigma_max=200, N=10)
+    # schedule_train = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
     # schedule_infer = ScheduleDDPM()
     schedule_train = ScheduleDDPM()
     
     # in_ch: number of predicted quantities
     # out_ch: number of predicted quantities
     # precond_ch: number of conditional fields
-    model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=14, 
+    model = Scaled(myUnet)(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=14, 
                            scale=(train.meanx, train.stdx, train.meanf, train.stdf),
                            ch_mult=(1, 2, 2), attn_resolutions=(16,))
-    # model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=4, out_ch=4, ch=256, precond_ch=13, 
+    # model = PredX0(Scaled(myUnet))(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=13, 
     #                        scale=(train.meanx, train.stdx, train.meanf, train.stdf),
     #                        ch_mult=(1, 2, 2), attn_resolutions=(16,)) 
 
@@ -124,6 +122,7 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
             # last_epoch just finished — save its checkpoint before moving on
             if last_epoch >= 0:
                 a.wait_for_everyone()
+
                 # ---- checkpoint ----
                 if last_epoch % ckpt_everyn_epoch == 0:
                     if a.is_main_process:
@@ -162,9 +161,10 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         
 if __name__=='__main__':
     
-    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}_new/'
+    path = f'/global/homes/j/jiarongw/scratch_folder/final/OPTION{OPTION}_continuous/'
     os.makedirs(path, exist_ok=True)
-    # main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
+    # main(path, train_batch_size=4, epochs=6, sample_batch_size=2, RESUME=False, ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
     #      gradient_accumulation_steps=4)    
-    main(path, train_batch_size=4, epochs=2, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_6.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=4, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_6.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, 
+         gradient_accumulation_steps=4)

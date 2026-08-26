@@ -3,6 +3,7 @@
 
 import math
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from itertools import pairwise
 from torch import nn
@@ -13,21 +14,49 @@ from .model import (
 def Normalize(ch):
     return torch.nn.GroupNorm(num_groups=32, num_channels=ch, eps=1e-6, affine=True)
 
-def Upsample(ch):
+class GeoConv2d(nn.Module):
+    ''' Conv2d that wraps circularly along width (longitude, last dim) and
+        pads with zeros along height (latitude), since the globe is periodic
+        in longitude but not in latitude (poles are real boundaries). '''
+    def __init__(self, in_ch, out_ch, kernel_size=3, stride=1, periodic=True):
+        super().__init__()
+        self.periodic = periodic
+        self.pad = kernel_size // 2
+        padding = 0 if periodic else self.pad
+        self.conv = torch.nn.Conv2d(in_ch, out_ch, kernel_size=kernel_size, stride=stride, padding=padding)
+
+    def forward(self, x):
+        if self.periodic and self.pad > 0:
+            x = F.pad(x, (self.pad, self.pad, 0, 0), mode='circular')
+            x = F.pad(x, (0, 0, self.pad, self.pad), mode='constant', value=0)
+        return self.conv(x)
+
+def Upsample(ch, periodic=False):
     return nn.Sequential(
         nn.Upsample(scale_factor=2.0, mode='nearest'),
-        torch.nn.Conv2d(ch, ch, kernel_size=3, stride=1, padding=1),
+        GeoConv2d(ch, ch, kernel_size=3, stride=1, periodic=periodic),
     )
 
-def Downsample(ch):
-    return nn.Sequential(
-        nn.ConstantPad2d((0, 1, 0, 1), 0),
-        torch.nn.Conv2d(ch, ch, kernel_size=3, stride=2, padding=0),
-    )
+class GeoDownsample(nn.Module):
+    def __init__(self, ch, periodic=False):
+        super().__init__()
+        self.periodic = periodic
+        self.conv = torch.nn.Conv2d(ch, ch, kernel_size=3, stride=2, padding=0)
+
+    def forward(self, x):
+        if self.periodic:
+            x = F.pad(x, (0, 1, 0, 0), mode='circular')
+        else:
+            x = F.pad(x, (0, 1, 0, 0), mode='constant', value=0)
+        x = F.pad(x, (0, 0, 0, 1), mode='constant', value=0)
+        return self.conv(x)
+
+def Downsample(ch, periodic=False):
+    return GeoDownsample(ch, periodic=periodic)
 
 class ResnetBlock(nn.Module):
     def __init__(self, *, in_ch, out_ch=None, conv_shortcut=False,
-                 dropout, temb_channels=512):
+                 dropout, temb_channels=512, periodic=False):
         super().__init__()
         self.in_ch = in_ch
         out_ch = in_ch if out_ch is None else out_ch
@@ -37,7 +66,7 @@ class ResnetBlock(nn.Module):
         self.layer1 = nn.Sequential(
             Normalize(in_ch),
             nn.SiLU(),
-            torch.nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1),
+            GeoConv2d(in_ch, out_ch, kernel_size=3, stride=1, periodic=periodic),
         )
         self.temb_proj = nn.Sequential(
             nn.SiLU(),
@@ -47,11 +76,13 @@ class ResnetBlock(nn.Module):
             Normalize(out_ch),
             nn.SiLU(),
             torch.nn.Dropout(dropout),
-            torch.nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1),
+            GeoConv2d(out_ch, out_ch, kernel_size=3, stride=1, periodic=periodic),
         )
         if self.in_ch != self.out_ch:
-            kernel_stride_padding = (3,1,1) if self.use_conv_shortcut else (1,1,0)
-            self.shortcut = torch.nn.Conv2d(in_ch, out_ch, *kernel_stride_padding)
+            if self.use_conv_shortcut:
+                self.shortcut = GeoConv2d(in_ch, out_ch, kernel_size=3, stride=1, periodic=periodic)
+            else:
+                self.shortcut = torch.nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=1, padding=0)
 
     def forward(self, x, temb):
         h = x
@@ -92,6 +123,7 @@ class Unet(nn.Module, ModelMixin):
                  resamp_with_conv = True,
                  sig_embed        = None,
                  cond_embed       = None,
+                 periodic         = False,
                  ):
         super().__init__()
 
@@ -105,14 +137,14 @@ class Unet(nn.Module, ModelMixin):
         # Embeddings
         self.sig_embed = sig_embed or SigmaEmbedderSinCos(self.temb_ch)
         make_block = lambda in_ch, out_ch: ResnetBlock(
-            in_ch=in_ch, out_ch=out_ch, temb_channels=self.temb_ch, dropout=dropout
+            in_ch=in_ch, out_ch=out_ch, temb_channels=self.temb_ch, dropout=dropout, periodic=periodic
         )
         self.cond_embed = cond_embed
 
         # Downsampling
         curr_res = in_dim
         in_ch_dim = [ch * m for m in (1,)+ch_mult]
-        self.conv_in = torch.nn.Conv2d(in_ch, self.ch, kernel_size=3, stride=1, padding=1)
+        self.conv_in = GeoConv2d(in_ch, self.ch, kernel_size=3, stride=1, periodic=periodic)
         self.downs = nn.ModuleList()
         for i, (block_in, block_out) in enumerate(pairwise(in_ch_dim)):
             down = nn.Module()
@@ -124,7 +156,7 @@ class Unet(nn.Module, ModelMixin):
                 down.blocks.append(CondSequential(*block))
                 block_in = block_out
             if i < self.num_resolutions - 1: # Not last iter
-                down.downsample = Downsample(block_in)
+                down.downsample = Downsample(block_in, periodic=periodic)
                 curr_res = curr_res // 2
             self.downs.append(down)
 
@@ -150,7 +182,7 @@ class Unet(nn.Module, ModelMixin):
                 up.blocks.append(CondSequential(*block))
                 block_in = block_out
             if i_level < self.num_resolutions - 1: # Not last iter
-                up.upsample = Upsample(block_in)
+                up.upsample = Upsample(block_in, periodic=periodic)
                 curr_res = curr_res * 2
             self.ups.append(up)
 
@@ -158,7 +190,7 @@ class Unet(nn.Module, ModelMixin):
         self.out_layer = nn.Sequential(
             Normalize(block_in),
             nn.SiLU(),
-            torch.nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1),
+            GeoConv2d(block_in, out_ch, kernel_size=3, stride=1, periodic=periodic),
         )
 
     def forward(self, x, sigma, cond=None):
@@ -205,6 +237,7 @@ class myUnet(nn.Module, ModelMixin):
                  attn_resolutions = (16,),
                  dropout          = 0.1,
                  sig_embed        = None,
+                 periodic         = False,
                  ):
         super().__init__()
 
@@ -215,7 +248,7 @@ class myUnet(nn.Module, ModelMixin):
         self.precond_ch = precond_ch
         self.input_dims = (in_ch, in_dim, in_dim)
         self.temb_ch = self.ch * embed_ch_mult
-        
+
         # Saving scales for construction of dataset
         self.register_buffer('meanx', scale[0])
         self.register_buffer('stdx', scale[1])
@@ -225,14 +258,14 @@ class myUnet(nn.Module, ModelMixin):
         # Embeddings
         self.sig_embed = sig_embed or SigmaEmbedderSinCos(self.temb_ch)
         make_block = lambda in_ch, out_ch: ResnetBlock(
-            in_ch=in_ch, out_ch=out_ch, temb_channels=self.temb_ch, dropout=dropout
+            in_ch=in_ch, out_ch=out_ch, temb_channels=self.temb_ch, dropout=dropout, periodic=periodic
         )
 
         # Downsampling
         curr_res = in_dim
         in_ch_dim = [ch * m for m in (1,)+ch_mult]
         # Only the first conv layer takes precond channels
-        self.conv_in = torch.nn.Conv2d(in_ch+precond_ch, self.ch, kernel_size=3, stride=1, padding=1)
+        self.conv_in = GeoConv2d(in_ch+precond_ch, self.ch, kernel_size=3, stride=1, periodic=periodic)
         self.downs = nn.ModuleList()
         for i, (block_in, block_out) in enumerate(pairwise(in_ch_dim)):
             down = nn.Module()
@@ -244,7 +277,7 @@ class myUnet(nn.Module, ModelMixin):
                 down.blocks.append(CondSequential(*block))
                 block_in = block_out
             if i < self.num_resolutions - 1: # Not last iter
-                down.downsample = Downsample(block_in)
+                down.downsample = Downsample(block_in, periodic=periodic)
                 curr_res = curr_res // 2
             self.downs.append(down)
 
@@ -270,7 +303,7 @@ class myUnet(nn.Module, ModelMixin):
                 up.blocks.append(CondSequential(*block))
                 block_in = block_out
             if i_level < self.num_resolutions - 1: # Not last iter
-                up.upsample = Upsample(block_in)
+                up.upsample = Upsample(block_in, periodic=periodic)
                 curr_res = curr_res * 2
             self.ups.append(up)
 
@@ -278,7 +311,7 @@ class myUnet(nn.Module, ModelMixin):
         self.out_layer = nn.Sequential(
             Normalize(block_in),
             nn.SiLU(),
-            torch.nn.Conv2d(block_in, out_ch, kernel_size=3, stride=1, padding=1),
+            GeoConv2d(block_in, out_ch, kernel_size=3, stride=1, periodic=periodic),
         )
 
     def forward(self, x, sigma, cond=None): # Here cond has shape (B, C, H, W)
