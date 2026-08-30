@@ -154,5 +154,7 @@ if __name__=='__main__':
 
     path = f'/global/homes/j/jiarongw/scratch_folder/review/OPTION{OPTION}_periodic/'
     os.makedirs(path, exist_ok=True)
-    main(path, train_batch_size=4, epochs=10, sample_batch_size=2, RESUME=False, weights_file=None,
-         ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    # main(path, train_batch_size=4, epochs=10, sample_batch_size=2, RESUME=False, weights_file=None,
+    #      ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=5, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_7.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)

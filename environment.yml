@@ -1,0 +1,32 @@
+name: wavediffusion
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.13
+  - pip
+  # Scientific stack used by data/analysis scripts and notebooks
+  - numpy
+  - scipy
+  - pandas
+  - xarray
+  - netcdf4
+  - matplotlib
+  - cartopy
+  - jupyterlab
+  - ipykernel
+  - ipywidgets
+  - boto3
+  # Testing
+  - pytest
+  - pip:
+      # Deep learning stack (installed via pip for correct CUDA wheel selection;
+      # see https://pytorch.org/get-started/locally/ if you need a specific CUDA build)
+      - torch
+      - torchvision
+      - einops
+      - accelerate
+      - torch-ema
+      # Wave-spectra packages needed only for NDBC buoy partition reconstruction
+      # (data/NDBC/buoy_reconstruct_partition.py)
+      - roguewavespectrum
+      - wavespectra

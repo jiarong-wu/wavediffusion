@@ -350,37 +350,6 @@ class npyDataResized(MultiFileNpyData):
         mask = self.tf_icymask(mask)
         return x, f, mask
 
-# Example usage:
-if __name__ == "__main__":
-    # Create file list for 12 months
-    file_list = [
-        (f"data/X_month_{i:02d}.npy", f"data/F_month_{i:02d}.npy")
-        for i in range(1, 13)
-    ]
-    
-    # Initialize dataset
-    dataset = MultiFileNpyData(
-        file_list=file_list,
-        maskname="data/mask.npy",
-        compute_stats=True
-    )
-    
-    # Random sampling across full year
-    from torch.utils.data import DataLoader, RandomSampler
-    
-    sampler = RandomSampler(dataset)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=32, 
-        sampler=sampler,
-        num_workers=4
-    )
-    
-    # Iterate through random samples from all months
-    for x, f in dataloader:
-        print(f"Batch shape: {x.shape}")
-        break
-
 
 ### With wind history.
 class npyDataWndHist(npyDataResized):

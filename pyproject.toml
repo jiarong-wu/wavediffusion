@@ -37,6 +37,8 @@ dependencies = [
   "torch",
   "tqdm",
   "einops",
+  "matplotlib",
+  "xarray",
 ]
 
 [project.urls]
@@ -47,14 +49,9 @@ dependencies = [
 
 [project.optional-dependencies] # Optional
 dev = ["build", "twine"]
-test = ["pytest", "diffusers==0.32.1"]
+test = ["pytest"]
 examples = [
-  "einops",
-  "diffusers",
-  "transformers",
-  "datasets",
   "jupyter",
-  "matplotlib",
   "torch-ema",
 ]
 

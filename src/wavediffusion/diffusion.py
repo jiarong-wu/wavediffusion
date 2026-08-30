@@ -56,12 +56,6 @@ class ScheduleLDM(Schedule):
     def __init__(self, N: int=1000, beta_start: float=0.00085, beta_end: float=0.012):
         super().__init__(sigmas_from_betas(torch.linspace(beta_start**0.5, beta_end**0.5, N)**2))
 
-# Sigmoid schedule used in GeoDiff
-class ScheduleSigmoid(Schedule):
-    def __init__(self, N: int=1000, beta_start: float=0.0001, beta_end: float=0.02):
-        betas = torch.sigmoid(torch.linspace(-6, 6, N)) * (beta_end - beta_start) + beta_start
-        super().__init__(sigmas_from_betas(betas))
-
 # Cosine schedule used in Nichol and Dhariwal 2021
 class ScheduleCosine(Schedule):
     def __init__(self, N: int=1000, beta_start: float=0.0001, beta_end: float=0.02, max_beta: float=0.999):
@@ -94,62 +88,7 @@ def generate_train_sample(x0: Union[torch.FloatTensor, Tuple[torch.FloatTensor, 
 #   Otherwise, x[i] will be paired with sigma[i] when calling model
 # Have a `rand_input` method for generating random xt during sampling
 
-def training_loop(loader      : DataLoader,
-                  model       : nn.Module,
-                  schedule    : Schedule,
-                  accelerator : Optional[Accelerator] = None,
-                  epochs      : int = 10000,
-                  lr          : float = 1e-3,
-                  conditional : bool = False):
-    accelerator = accelerator or Accelerator()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
-    for _ in (pbar := tqdm(range(epochs))):
-        for x0 in loader:
-            model.train()
-            optimizer.zero_grad()
-            x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
-            loss = model.get_loss(x0, sigma, eps, cond=cond)
-            yield SimpleNamespace(**locals()) # For extracting training statistics
-            accelerator.backward(loss)
-            optimizer.step()
-
-### Work with dataloader that will return a mask
-# def masked_training_loop(loader      : DataLoader,
-#                   model       : nn.Module,
-#                   schedule    : Schedule,
-#                   accelerator : Optional[Accelerator] = None,
-#                   epochs      : int = 10000,
-#                   lr          : float = 1e-3,
-#                   conditional : bool = True,
-#                   start_epoch : int = 0):
-#     accelerator = accelerator or Accelerator()
-#     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-#     model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
-#     global_step = 0
-#     for epoch in (pbar := tqdm(range(start_epoch+1, start_epoch+epochs+1))):
-#         for x, f, mask in loader:
-#             model.train()
-#             optimizer.zero_grad()
-#             x0 = [x, f] # Concatenate inputs and conditions
-#             x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
-#             # Add mask to noise if provided (mask shape: (1, 1, H, W))
-#             if mask is not None:
-#                 mask.to(eps.device)
-#                 eps = eps * mask
-#                 loss = accelerator.unwrap_model(model).get_loss_masked(x0, sigma, eps, mask=mask, cond=cond)
-#             else:
-#                 # Chatgpt suggusted this change accelerator.unwrap_model(model) and it worked
-#                 loss = accelerator.unwrap_model(model).get_loss(x0, sigma, eps, cond=cond)
-#                 # loss = model.get_loss(x0, sigma, eps, cond=cond)               
-#             accelerator.backward(loss)
-#             optimizer.step()
-#             yield SimpleNamespace(
-#                 loss=loss.detach(), step=global_step, epoch=epoch, pbar=pbar,
-#             )
-#             global_step += 1  
-
-# New training loop with gradient accumulation            
+# Training loop with gradient accumulation
 def masked_training_loop(loader      : DataLoader,
                   model       : nn.Module,
                   schedule    : Schedule,
@@ -191,49 +130,6 @@ def masked_training_loop(loader      : DataLoader,
             )
             global_step += 1 # Notice that this step is for micro-steps, not actual optimizer steps, which is handled by accelerator.accumulate()
             
-def masked_training_loop_lp(loader      : DataLoader,
-                  model       : nn.Module,
-                  schedule    : Schedule,
-                  accelerator : Optional[Accelerator] = None,
-                  epochs      : int = 10000,
-                  lr          : float = 1e-3,
-                  conditional : bool = True,
-                  start_epoch : int = 0,
-                  grad_accum_steps : int = 4):
-    accelerator = accelerator or Accelerator()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
-    global_step = 0
-    for epoch in (pbar := tqdm(range(start_epoch+1, start_epoch+epochs+1))):
-        for step_idx, (x, f, mask) in enumerate(loader):
-            model.train()
-            x0 = [x[:,[1]], f]
-            x0, sigma, eps, cond = generate_train_sample(x0, schedule, conditional)
-
-            # Use accelerator.accumulate() to handle gradient accumulation automatically
-            with accelerator.accumulate(model):
-                if mask is not None:
-                    mask = mask.to(eps.device)
-                    eps = eps * mask
-                    loss = accelerator.unwrap_model(model).get_loss_masked(
-                        x0, sigma, eps, mask=mask, cond=cond
-                    )
-                else:
-                    loss = accelerator.unwrap_model(model).get_loss(
-                        x0, sigma, eps, cond=cond
-                    )
-
-                accelerator.backward(loss)
-                optimizer.step()
-                optimizer.zero_grad()
-
-            yield SimpleNamespace(
-                loss=loss.detach(), step=global_step, epoch=epoch, pbar=pbar,
-            )
-            global_step += 1 # Notice that this step is for micro-steps, not actual optimizer steps, which is handled by accelerator.accumulate()
-                      
-            
-
 # Generalizes most commonly-used samplers:
 #   DDPM       : gam=1, mu=0.5
 #   DDIM       : gam=1, mu=0
@@ -329,21 +225,3 @@ def samples_thres(model      : nn.Module,
         else:
             xt = xt - (sig - sig_p) * eps_av + eta * model.rand_input(xt.shape[0]).to(xt) 
         yield xt
-        
-''' One-step sampling function for probing the model's behavior at high noise levels (e.g. sigma=20). '''        
-@torch.no_grad()
-def samples_onestep(model      : nn.Module,
-            sigma_max : float = 20.,   # A high noise level to probe model behavior
-            batchsize  : int = 1,
-            cond       : Optional[torch.Tensor] = None, 
-            accelerator: Optional[Accelerator] = None, 
-            mask       : Optional[torch.FloatTensor] = None):
-    model.eval()
-    accelerator = accelerator or Accelerator()
-    sigma0 = torch.tensor([sigma_max]).to(accelerator.device) # A very large noise level 
-    xt = model.rand_input(batchsize).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use randomly generated noise to probe the high noise level?
-    # xt = torch.zeros((batchsize,) + model.input_dims).to(accelerator.device) * sigma0 * mask.to(accelerator.device) # Use 0 to probe the high noise level?
-    eps = model.predict_eps(xt, sigma0, cond=cond.to(accelerator.device)) * mask.to(accelerator.device)
-    x0 = xt - eps * sigma0
-    # x0 = model.forward(xt, sigma0, cond=f.to(a.device)) * mask.to(a.device) # Only works if model is predicting state    
-    return x0
