@@ -23,6 +23,7 @@ __pycache__
 *.csv
 *.nc
 *.gif
+*.npz
 
 # Project specific
 /build/
@@ -32,8 +33,10 @@ __pycache__
 .venv
 .coverage
 
-# data files and resultsc
+# data files and results
 /temp/*
 /example/temp/*
 /data/Sofar/*
 /analysis/paper_figure/temp/*
+/analysis/paper_figure/so_bias/
+/analysis/paper_figure/output/

@@ -181,17 +181,19 @@ def masked_training_loop_plain(loader      : DataLoader,
     for epoch in (pbar := tqdm(range(start_epoch+1, start_epoch+epochs+1))):
         for x, f, mask in loader:
             model.train()
-            optimizer.zero_grad()
-            # Add mask to noise if provided (mask shape: (1, 1, H, W))
-            if mask is not None:
-                pred = model.forward(f)
-                loss = nn.MSELoss()(x*mask, pred*mask)
-            else:
-                pred = model.forward(f)
-                loss = nn.MSELoss()(x, pred)
+            # accelerator.accumulate() handles gradient accumulation (same as diffusion.masked_training_loop)
+            with accelerator.accumulate(model):
+                # Apply mask to prediction and target if provided (mask shape: (B, 1, H, W))
+                if mask is not None:
+                    pred = model.forward(f)
+                    loss = nn.MSELoss()(x*mask, pred*mask)
+                else:
+                    pred = model.forward(f)
+                    loss = nn.MSELoss()(x, pred)
 
-            accelerator.backward(loss)
-            optimizer.step()
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
             yield SimpleNamespace(
                 loss=loss.detach(), step=global_step, epoch=epoch, pbar=pbar,
             )

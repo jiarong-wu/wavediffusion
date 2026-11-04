@@ -4,7 +4,7 @@
 import numpy as np
 import os
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from matplotlib import pyplot as plt
 from accelerate import Accelerator
 from torch_ema import ExponentialMovingAverage as EMA
@@ -49,7 +49,8 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
         OPTION=OPTION, hist_duration_days=HIST_DURATION_DAYS, hist_freq_days=HIST_FREQ_DAYS
     )
     test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    test_file_names = [('wavemean_201904', 'forcing_201904')]
+    # Test set: all of 2019 (held out from training, 1993-2017), every TEST_STRIDE-th sample (see loader_test)
+    test_file_names = [(f'wavemean_2019{m:02d}', f'forcing_2019{m:02d}') for m in range(1, 13)]
     test_file_list = [(os.path.join(test_file_path, f'{x}.npy'),
                        os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
     test = npyDataWndHist(
@@ -62,7 +63,10 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
     )
 
     loader = DataLoader(train, batch_size=train_batch_size, shuffle=True)
-    loader_test = DataLoader(test, batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training
+    # Every 12th sample of 2019 (~240, one every 1.5 days at varying hours): a whole year at April's cost,
+    # since evaluate() runs over the whole loader every eval_everyn_step steps.
+    TEST_STRIDE = 12
+    loader_test = DataLoader(Subset(test, range(0, len(test), TEST_STRIDE)), batch_size=sample_batch_size, shuffle=True)  # Used for generating samples during training
 
     schedule_infer = ScheduleLogLinear(sigma_min=0.01, sigma_max=100, N=80)
     # schedule_train = ScheduleLogLinear(sigma_min=80, sigma_max=200, N=10)
@@ -125,26 +129,37 @@ def main(path, train_batch_size=1024, epochs=300, sample_batch_size=64, RESUME=F
 
         # ---- epoch-based triggers ----
         if ns.epoch != last_epoch:
+            # last_epoch just finished — save its checkpoint before moving on
+            if last_epoch >= 0:
+                a.wait_for_everyone()
+
+                # ---- checkpoint ----
+                if last_epoch % ckpt_everyn_epoch == 0:
+                    if a.is_main_process:
+                        print('Saving checkpoint... at epoch ', last_epoch)
+                        a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": last_epoch},
+                                path + f"ckpt_{last_epoch}.pt")
+                    a.wait_for_everyone()
+
+                # ---- sampling ----
+                if last_epoch % sample_everyn_epoch == 0:
+                    if a.is_main_process:
+                        print('Sampling... at epoch ', last_epoch)
+                        sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size,
+                                        test=test, filename=f"sample_epoch{last_epoch}", OPTION=OPTION)
+                    a.wait_for_everyone()
+
             last_epoch = ns.epoch
-            a.wait_for_everyone()
 
-            # ---- checkpoint ----
-            if ns.epoch % ckpt_everyn_epoch == 0:
-                a.wait_for_everyone()
-                if a.is_main_process:
-                    print('Saving checkpoint... at epoch ', ns.epoch)
-                    a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": ns.epoch},
-                            path + f"ckpt_{ns.epoch}.pt")
-                a.wait_for_everyone()
-
-            # ---- sampling ----
-            if ns.epoch % sample_everyn_epoch == 0:
-                a.wait_for_everyone()
-                if a.is_main_process:
-                    print('Sampling... at epoch ', ns.epoch)
-                    sample_and_save(model, ema, loader_test, schedule_infer, a, path, sample_batch_size,
-                                    test=test, filename=f"sample_epoch{ns.epoch}", OPTION=OPTION)
-                a.wait_for_everyone()
+    # Save final checkpoint after all epochs complete (the loop only saves at epoch starts,
+    # so the last epoch's training would otherwise be lost)
+    final_epoch = start_epoch + epochs
+    a.wait_for_everyone()
+    if a.is_main_process:
+        print(f'Saving final checkpoint at epoch {final_epoch}')
+        a.save({"model": a.unwrap_model(model).state_dict(), "ema": ema.state_dict(), "epoch": final_epoch},
+                path + f"ckpt_{final_epoch}.pt")
+    a.wait_for_everyone()
 
     log_file.close()
     test_log_file.close()
@@ -160,5 +175,5 @@ if __name__=='__main__':
     os.makedirs(path, exist_ok=True)
     # main(path, train_batch_size=4, epochs=10, sample_batch_size=2, RESUME=False, weights_file=None,
     #      ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
-    main(path, train_batch_size=4, epochs=7, sample_batch_size=2, RESUME=True,
-         weights_file=path+'ckpt_3.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)
+    main(path, train_batch_size=4, epochs=6, sample_batch_size=2, RESUME=True,
+         weights_file=path+'ckpt_16.pt', ckpt_everyn_epoch=1, sample_everyn_epoch=1, gradient_accumulation_steps=4)

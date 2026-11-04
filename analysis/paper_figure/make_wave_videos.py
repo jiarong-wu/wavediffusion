@@ -16,7 +16,7 @@ NC_PATHS = [
     '/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION1_moredata_sigma100_epoch20_200404/sample_data_200404.nc',
     '/global/homes/j/jiarongw/scratch_folder/final/temp/OPTION1_moredata_sigma100_epoch20_200409/sample_data_200409.nc',
 ]
-OUT_DIR = '/global/u1/j/jiarongw/wavediffusion/analysis/paper_figure/videos/'
+OUT_DIR = '/global/u1/j/jiarongw/wavediffusion/analysis/paper_figure/figures/videos/'
 
 VARIABLES = {
     'hs':  dict(long_name='Significant wave height', units='m',   cmap='Blues',    vmin=0, vmax=10,  ticks=[0, 2, 4, 6, 8, 10]),
@@ -35,13 +35,18 @@ def load_dataset(paths):
 
 def make_video(ds, var, out_path):
     meta = VARIABLES[var]
+    # Pacific-centred: longitudes as 0..360 and the map drawn in a frame rotated by 180 deg.
+    # imshow's transform is that same frame, so cartopy doesn't warp the first frame
+    # (which update()'s set_data would skip).
+    ds = ds.assign_coords(lon=ds.lon % 360).sortby('lon')
+    proj = ccrs.PlateCarree(central_longitude=180)
     truth = ds[f'{var}_truth']
     sample = ds[f'{var}_sample']
     times = ds.time.values
-    extent = [float(ds.lon.min()), float(ds.lon.max()), float(ds.lat.min()), float(ds.lat.max())]
+    extent = [float(ds.lon.min()) - 180, float(ds.lon.max()) - 180, float(ds.lat.min()), float(ds.lat.max())]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 3.5), dpi=130,
-                              subplot_kw={'projection': ccrs.PlateCarree()})
+                              subplot_kw={'projection': proj})
     fig.suptitle(f"{meta['long_name']} ({meta['units']})", fontsize=14)
 
     ims = []
@@ -50,7 +55,7 @@ def make_video(ds, var, out_path):
         ax.add_feature(cfeature.LAND, facecolor='0.85', zorder=2)
         ax.coastlines(resolution='110m', linewidth=0.5, zorder=3)
         im = ax.imshow(da.isel(time=0).values, origin='lower', extent=extent,
-                        transform=ccrs.PlateCarree(),
+                        transform=proj,
                         cmap=meta['cmap'], vmin=meta['vmin'], vmax=meta['vmax'])
         ims.append(im)
     cbar = fig.colorbar(ims[0], ax=axes, orientation='horizontal', fraction=0.05, pad=0.08, ticks=meta['ticks'])

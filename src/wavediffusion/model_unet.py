@@ -109,7 +109,9 @@ class AttnBlock(nn.Module):
         h_ = self.norm(x)
         h_ = rearrange(h_, 'b c h w -> b (h w) c')
         h_ = self.attn(h_)
-        h_ = rearrange(h_, 'b (h w) c -> b c h w', h=H, w=W)
+        # .contiguous(): rearrange returns a channels_last-strided view, which makes
+        # proj_out's weight grad mismatch DDP's bucket layout (stride warning + extra copy)
+        h_ = rearrange(h_, 'b (h w) c -> b c h w', h=H, w=W).contiguous()
         return x + self.proj_out(h_)
 
 ### Takes spatial field as preconditioning ###
@@ -232,3 +234,20 @@ class myUnet(nn.Module, ModelMixin):
 
         # out
         return self.out_layer(h)
+
+
+class DetUnet(myUnet):
+    ''' myUnet used as a deterministic regressor cond -> x. The noisy-input
+        channels are fed zeros and sigma is held fixed (so the sigma embedding
+        acts as a learned constant bias), giving exactly the same backbone and
+        state_dict layout as the diffusion model for a like-for-like baseline.
+        Call as model(cond); the output is in the same normalized space as x. '''
+    def __init__(self, *args, sigma_fixed=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sigma_fixed = sigma_fixed
+
+    def forward(self, cond):
+        B = cond.shape[0]
+        x = cond.new_zeros(B, *self.input_dims)
+        sigma = cond.new_full((B,), self.sigma_fixed)
+        return super().forward(x, sigma, cond=cond)

@@ -30,7 +30,7 @@ OUT_DIR = '/global/homes/j/jiarongw/scratch_folder/wave_data/NDBC'
 
 # Variable names per OPTION (matches sample.py var_names)
 OPTION_VARS = {
-    1: ['hs', 'tp', 'dir'],
+    1: ['hs', 'tm', 'dir'],
     2: ['hs', 'uss', 'vss', 'mssd', 'mssc'],
     3: ['hs_p1', 'tp_p1', 'dir_p1', 'hs_p2', 'tp_p2', 'dir_p2', 'ci'],
 }

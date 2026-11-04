@@ -1,5 +1,157 @@
 # Changelog
 
+## 2026-10-07 — Use every step of each monthly file; regional variability analysis
+
+### Data loading: last step of each month no longer dropped
+- `MultiFileNpyData.__init__` used `file_len = len(x_mmap) - 1`, so each month's
+  last step (21Z on the last day) was never used. This has been there since the
+  initial commit. No code reads a following step, and the dropped steps are valid
+  data. `file_len` is now `len(x_mmap)`, and `timeindex.file_lengths` matches.
+- Effects of the old `- 1`:
+  - **Wind history at month boundaries.** History is read by index, so a lag that
+    reached into the previous month came out 3 h too long. For example, the
+    1-day-ago wind for Feb 1 00Z came from Jan 30 21Z. This affected about 30% of
+    training samples for a 10-day window. Lags are now exact.
+  - **Sampling stride.** Stepping 8 indices through concatenated months drifted
+    3 h per month (Jan 00Z, Feb 03Z, Mar 06Z, …). Daily stepping now stays at 00Z.
+  - **Training data.** It skipped 1 step in ~248 (0.4%).
+- **Compatibility:**
+  - Existing checkpoints load and run unchanged. They were trained with
+    slightly off lags on part of the data, so retraining isn't required.
+  - For multi-month datasets, the date a given index points to has changed (by
+    3 h per month since the first file). Outputs saved by index from earlier
+    multi-month `sample.py` runs no longer line up with a newly built dataset.
+    Single-month runs are unaffected.
+  - Existing rows in `checkpoint_comparison_stats.csv` were scored at the old,
+    drifting hours. The resume logic keys on the day only, so new rows would be
+    mixed with old ones. Move the CSV aside before re-running for consistent
+    results.
+
+### `npyDataWndHist` docstring corrected
+- The history channels hold winds from `hist_duration_days - hist_freq_days`
+  days ago up to the current step, oldest first. That is 4,3,2,1,0 days ago for
+  (5, 1) and 8,6,4,2,0 days ago for (10, 2), not 1..5 / 2..10 as documented.
+  The last pair repeats the current wind already in channels 0–1. The code is
+  unchanged, since checkpoints depend on this layout. The `timeindex.hist_window`
+  docstring was corrected to match.
+
+### `analysis/paper_figure/sample.py`
+- `HIST_DURATION_DAYS` / `HIST_FREQ_DAYS` set the wind-history window (default
+  5 / 1, as before). It used to be the `npyDataWndHist` default, with
+  `precond_ch=14` hard-coded. `precond_ch` is now derived from the window, so a
+  hist10d checkpoint only needs `HIST_DURATION_DAYS = 10`.
+- With wind history (`HIST = True`), it also loads the month before the first
+  test month: the previous December for a year run, the previous month for a
+  single-month run. This gives the first test days a full history window.
+  Previously Jan 1–5 (5-day window) or Jan 1–10 (10-day) of each year run were
+  never sampled. Nothing in the extra month is sampled. If its files are missing
+  (e.g. before 1993), it is left out with a note, and those first days are
+  skipped as before.
+- `SAMPLE_DAYS` / `SAMPLE_HOUR` pick the days of every test month to sample and
+  the hour, e.g. `[1, 8, 15, 22]` at 00Z. Days past a month's end are skipped.
+  With the default `SAMPLE_DAYS = None` it steps `every_n` from the first test
+  day, which stays on the same hour every month.
+- Writes `dates.csv` (dataset index → date) into `save_path`. Because of the
+  extra month, the dataset index of a given date differs from earlier runs, and
+  with `SAMPLE_DAYS` set the saved indices aren't evenly spaced. Notebooks that
+  loop `range(0, N, every_n)` over saved files should read the indices from
+  `dates.csv`.
+
+### `src/wavediffusion/timeindex.py`
+- `months_file_list` builds the file list, including the extra history month.
+- `select_sample_indices` holds the date-selection rule shared by `sample.py` and
+  `regional_variability.py`. `dates_to_raw_indices` and `write_dates_csv` are
+  its helpers.
+
+### New: `analysis/paper_figure/regional_variability.py` (+ `.sh`)
+- Seasonal cycle and interannual trend (Jan/Apr/Jul/Oct) of regional-mean `hs`,
+  `tm`, `thetam` and `u10` over the test years 2019–2025. It uses
+  latitude-weighted means over ice-free ocean pixels.
+- `thetam` is averaged circularly: the CSV keeps per-date `thetam_sin` and
+  `thetam_cos`, and monthly means are the atan2 of their averages. For plotting
+  and trends, each region's directions are unwrapped around its overall truth
+  mean, so lines don't jump at 0°/360°.
+- Three stages: `dates` → `compute` → `plot`.
+  - `dates` writes the dates `sample.py` would sample (one run per year, daily at
+    00Z) without running any sampling.
+  - `compute` evaluates truth only on the dates in `DATES_CSV`. Once samples
+    exist, point it at the sample runs' own `dates.csv` files so truth and
+    sampled cover the same dates.
+- Pacific regions follow Young (1999, Int. J. Climatol. 19, 931–950). The box
+  bounds are provisional and still need checking against the paper's Fig. 2.
+- `sample` stage (GPU, `regional_variability_sample.sh`) runs the models in
+  `MODELS` on the same dates and writes the same regional means, one row per
+  ensemble member. It appends date by date, so a re-run resumes after a timeout.
+  - `hist10d_ckpt16`: diffusion, 10 members × 10 steps (~5 h for 2019–2025).
+  - `hist10d_det_ckpt16`: deterministic.
+  - `truth_resized`: truth sent through the 320×320 resize and back, to
+    separate the resize smoothing from model error.
+- Model outputs aren't multiplied by the interpolated ice mask (unlike
+  `compare_checkpoints_stats.py`). Model and truth are averaged over the same
+  binary native-grid ice-free pixels.
+- Plots: members are averaged first (the regional mean of the ensemble mean).
+  The interannual figure is a region × month grid with all sources overlaid.
+  `u10` is a model input, so it's plotted for truth only.
+
+## 2026-10-05 — Shared metrics/time-index modules, CRPS, deterministic baseline, fixed climatology
+
+### New modules in `src/wavediffusion/`
+- `metrics.py` — the masked, latitude-weighted metrics, factored out of
+  `compare_checkpoints_stats.py`: `weighted_mse`, `weighted_mae`, `weighted_acc`,
+  `weighted_crps` (new; fair ensemble estimator, falls back to MAE for a single
+  member), plus per-pixel `ensemble_mean_var`/`ensemble_crps` and `circular_diff`.
+  Unlike the copies in `stats.ipynb`, these wrap direction differences and use
+  circular ensemble means (`circular=True`). See README "Evaluation".
+- `timeindex.py` — file discovery, the date index over concatenated monthly files,
+  history-window padding (`hist_window`), selection of evaluation dates that skips
+  calendar gaps (`select_eval_indices`), and raw-to-dataset index conversion.
+
+### Models and training
+- `model_unet.DetUnet` — deterministic regressor with the same backbone as `myUnet`.
+  `example/experiments/wave_simple.py` was rewritten to train it on the
+  `meandiff_periodic_hist10d.py` setup.
+- `plain_unet.masked_training_loop_plain` now uses `accelerator.accumulate()`.
+  Previously `gradient_accumulation_steps` had no effect there.
+- `model_unet.AttnBlock`: `.contiguous()` after the output `rearrange`, which
+  silences DDP's "Grad strides do not match bucket view strides" warning. Outputs and
+  checkpoints are unchanged.
+
+### `analysis/paper_figure/compare_checkpoints_stats.py`
+- Adds a `{v}_crps` column. Old CSVs without it are rejected instead of being
+  appended to with misaligned columns.
+- Checkpoints marked `deterministic=True` (`DetUnet`) are scored with one forward
+  pass. Their `crps` column is the MAE and their `spreadvar` is NaN.
+- `hist_freq_days` per checkpoint. The number of history channels was previously
+  `4 + 2*hist_days`, which was wrong for any frequency other than 1 day.
+
+### Renames (OPTION 1 only)
+`tp` → `tm` and `thetap` → `thetam` in `compare_checkpoints_stats.py`,
+`plot_checkpoint_comparison.py`, `sample.py`, and `data/NDBC/gather_diffusion_at_buoy.py`
+(`tp` only). In `waveana.assemble`, `tp` became `tm` and `tp_hat` became `tm_hat`,
+with the matching updates in `phys.ipynb`. OPTION 3's `tp_p*`/`thetap_p*` are real
+peak quantities and are unchanged. CSV columns changed accordingly.
+
+### Climatology (`npyDataResized.compute_clim_map`, `compute_clim.py`)
+- Each pixel is now averaged over its own ice-free steps. Previously it divided by
+  the total number of steps, which biased the climatology low at partially iced
+  pixels (about 0.5× on a March 2010 test).
+- Direction channels (`circular_x`) use a circular mean. The old arithmetic mean
+  was more than 30° off on about 24–29% of valid pixels.
+- `compute_clim.py` takes `OPTION` as an argument; `compute_clim.sh` submits it as a job.
+- `mean_clim_monthly.nc` was regenerated (the old files are in
+  `processed/old_clim_arith/`). `derived_clim_monthly.nc` and
+  `partition_clim_monthly.nc` have not been regenerated yet.
+- Known data issue, judged negligible: 9 whole days in 2005–2020 have an anomalous
+  ice mask in `forcing_*.npy`, with far more ice-free ocean than that month's median.
+  The worst is 2013-10-23 (0.958 vs 0.853). The others are 2007-03-15/16,
+  2009-03-18/19, 2006-04-16, 2006-07-06, 2009-08-05, 2011-08-27 and 2015-08-06.
+  These days only affect the climatology near the ice edge.
+
+### Results that need re-running
+All ACC values computed before this change, in `checkpoint_comparison_stats.csv` and
+`stats.ipynb`, used the old climatology. The CSV also needs regenerating for the
+CRPS column and the renamed variables.
+
 ## 2026-08-28 — Prune package to code actually used by example/data/analysis
 
 Removed code inherited from [smalldiffusion](https://github.com/yuanchenyang/smalldiffusion)

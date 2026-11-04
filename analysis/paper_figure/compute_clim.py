@@ -1,5 +1,8 @@
-''' Compute monthly climatology of CI and save as a netcdf file. '''
+''' Compute monthly climatology (per-pixel mean over ice-free steps; circular
+    mean for direction channels) and save as a netcdf file, e.g. for ACC.
+    Usage: python compute_clim.py OPTION   (1, 2, or 3) '''
 import gc
+import sys
 import numpy as np
 import os
 import xarray as xr
@@ -7,7 +10,7 @@ from tqdm import tqdm
 from wavediffusion.wavedata import npyDataResized
 from wavediffusion.waveana import add_lat_lon
 
-OPTION = 2
+OPTION = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 
 ###############################
 # Saving the mean variables climatology for ACC computation
@@ -34,7 +37,7 @@ if OPTION == 1:
             meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
             OPTION=OPTION
         )
-        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map()
+        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map(circular_x=(2, 8))  # dir, mssd
         ds_clim = add_lat_lon(clim_meanx[:], ['hs','tm','dir']) 
         ds_clim.to_netcdf(f'~/scratch_folder/final/processed/mean_clim_{m:02d}.nc')  # Save each month's climatology separately to avoid memory issues
         clims.append(ds_clim)
@@ -69,7 +72,7 @@ if OPTION == 2:
             meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
             OPTION=OPTION
         )
-        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map()
+        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map(circular_x=(2, 8))  # dir, mssd
         ds_clim = add_lat_lon(clim_meanx[[0,4,5,6,7]], ['hs', 'uss', 'vss', 'mssd', 'mssc'])
         ds_clim.to_netcdf(f'~/scratch_folder/final/processed/derived_clim_{m:02d}.nc')
         clims.append(ds_clim)
@@ -105,7 +108,7 @@ if OPTION == 3:
             meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
             OPTION=OPTION
         )
-        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map()
+        clim_meanx, clim_stdx, clim_meanf, clim_stdf = data.compute_clim_map(circular_x=(2, 5))  # dir_p1, dir_p2
         ds_clim = add_lat_lon(clim_meanx, ['hs_p1', 'tp_p1', 'thetap_p1', 'hs_p2', 'tp_p2', 'thetap_p2', 'ci'])  # Only save the first three variables, and add lat/lon coordinates for saving as netcdf
         ds_clim.to_netcdf(f'~/scratch_folder/final/processed/partition_clim_{m:02d}.nc')  # Save each month's climatology separately to avoid memory issues
         clims.append(ds_clim)

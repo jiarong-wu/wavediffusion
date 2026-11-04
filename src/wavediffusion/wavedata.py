@@ -55,7 +55,7 @@ class MultiFileNpyData(Dataset):
             self.X_files.append(x_mmap)
             self.F_files.append(f_mmap)  # keep as mmap; avoids loading all years into RAM at init
             
-            file_len = len(x_mmap) - 1  # -1 to prevent last sample
+            file_len = len(x_mmap)
             self.file_lengths.append(file_len)
             self.cumulative_lengths.append(self.cumulative_lengths[-1] + file_len)
         
@@ -187,15 +187,25 @@ class MultiFileNpyData(Dataset):
         
         return meanx, stdx, meanf, stdf
     
-    def compute_clim_map(self, chunk_size=32):
-        """Compute spatial mean and std across all files, one chunk at a time."""
-        n_batch_x = sum(f.shape[0] for f in self.X_files)
-        n_batch_f = sum(f.shape[0] for f in self.F_files)
+    def compute_clim_map(self, chunk_size=32, circular_x=()):
+        """Per-pixel mean and std across all files, one chunk at a time.
 
-        sum_x    = np.zeros(self.X_files[0].shape[1:], dtype=np.float64)
-        sum_f    = np.zeros(self.F_files[0].shape[1:], dtype=np.float64)
-        sum_sq_x = np.zeros(self.X_files[0].shape[1:], dtype=np.float64)
-        sum_sq_f = np.zeros(self.F_files[0].shape[1:], dtype=np.float64)
+        Each pixel is averaged only over the steps where it is valid (ice-free
+        if use_icymask, else ocean), i.e. divided by its own valid count rather
+        than the total number of steps; pixels never valid come out NaN.
+        X channels listed in `circular_x` are angles in degrees: their mean is
+        the circular mean (atan2 of the summed sin/cos, in [0, 360)) and their
+        std is the circular std sqrt(-2 ln R), in degrees."""
+        circular_x = list(circular_x)
+
+        shape_x, shape_f = self.X_files[0].shape[1:], self.F_files[0].shape[1:]
+        count    = np.zeros((1,) + shape_x[1:], dtype=np.float64)
+        sum_x    = np.zeros(shape_x, dtype=np.float64)
+        sum_sq_x = np.zeros(shape_x, dtype=np.float64)
+        sum_f    = np.zeros(shape_f, dtype=np.float64)
+        sum_sq_f = np.zeros(shape_f, dtype=np.float64)
+        sum_sin  = np.zeros((len(circular_x),) + shape_x[1:], dtype=np.float64)
+        sum_cos  = np.zeros_like(sum_sin)
 
         for x_file, f_file in tqdm(zip(self.X_files, self.F_files),
                                    total=len(self.X_files), desc='clim map'):
@@ -208,24 +218,39 @@ class MultiFileNpyData(Dataset):
                 if self.use_icymask:
                     mask = f_chunk[:, 2:3, :, :].astype(bool)  # N×1×H×W
                 else:
-                    mask = self.landmask[np.newaxis, np.newaxis].astype(bool)  # 1×1×H×W
+                    mask = np.broadcast_to(self.landmask[np.newaxis, np.newaxis].astype(bool),
+                                           (end - start, 1) + shape_x[1:])  # N×1×H×W
 
-                x_m = x_chunk * mask
-                f_m = f_chunk * mask
+                # np.where rather than multiplying by the mask, so NaNs on land don't propagate
+                x_m = np.where(mask, x_chunk, 0.0)
+                f_m = np.where(mask, f_chunk, 0.0)
 
+                count    += mask.sum(0)
                 sum_x    += x_m.sum(0)
-                sum_f    += f_m.sum(0)
                 sum_sq_x += (x_m * x_m).sum(0)
+                sum_f    += f_m.sum(0)
                 sum_sq_f += (f_m * f_m).sum(0)
+                if circular_x:
+                    ang = np.deg2rad(x_chunk[:, circular_x])
+                    sum_sin += np.where(mask, np.sin(ang), 0.0).sum(0)
+                    sum_cos += np.where(mask, np.cos(ang), 0.0).sum(0)
 
                 del x_chunk, f_chunk, x_m, f_m, mask
 
-        meanx = (sum_x    / n_batch_x).astype(np.float32)
-        meanf = (sum_f    / n_batch_f).astype(np.float32)
-        stdx  = np.sqrt(sum_sq_x / n_batch_x - meanx**2).astype(np.float32)
-        stdf  = np.sqrt(sum_sq_f / n_batch_f - meanf**2).astype(np.float32)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            n_valid = np.where(count > 0, count, np.nan)
+            meanx = sum_x / n_valid
+            stdx  = np.sqrt(np.maximum(sum_sq_x / n_valid - meanx**2, 0.0))
+            meanf = sum_f / n_valid
+            stdf  = np.sqrt(np.maximum(sum_sq_f / n_valid - meanf**2, 0.0))
+            if circular_x:
+                s, c = sum_sin / n_valid, sum_cos / n_valid
+                meanx[circular_x] = np.rad2deg(np.arctan2(s, c)) % 360.0
+                R = np.clip(np.sqrt(s**2 + c**2), 1e-12, 1.0)
+                stdx[circular_x] = np.rad2deg(np.sqrt(-2.0 * np.log(R)))
 
-        return meanx, stdx, meanf, stdf
+        return (meanx.astype(np.float32), stdx.astype(np.float32),
+                meanf.astype(np.float32), stdf.astype(np.float32))
     
     def invert_x(self, x):
         # x of shape C*H*W (e.g. 4*320*320) normalized
@@ -355,13 +380,19 @@ class npyDataResized(MultiFileNpyData):
 class npyDataWndHist(npyDataResized):
     """Appends past wind (u, v) snapshots to the forcing tensor as extra channels.
 
-    Historical samples run from `hist_freq_days` up to `hist_duration_days`
-    before the current step (inclusive), spaced `hist_freq_days` apart, e.g.
-    hist_duration_days=5, hist_freq_days=1 -> wind from 1,2,3,4,5 days ago
+    Historical samples run from `hist_duration_days - hist_freq_days` days
+    before the current step up to the current step itself, spaced
+    `hist_freq_days` apart, and are appended oldest first, e.g.
+    hist_duration_days=5, hist_freq_days=1 -> wind from 4,3,2,1,0 days ago
     (5 samples, daily); hist_duration_days=10, hist_freq_days=2 -> wind from
-    2,4,6,8,10 days ago (5 samples, every other day). `hist_duration_days`
-    must be a multiple of `hist_freq_days`. Source data is 3-hourly
-    (SAMPLES_PER_DAY=8 steps/day).
+    8,6,4,2,0 days ago (5 samples, every other day). The last history pair
+    therefore repeats the current wind already in channels 0-1. (Checkpoints
+    were trained with this layout, so keep it unless retraining.) `padding`
+    is still hist_duration_days of steps, so the first usable step is
+    hist_duration_days in. Lags are in concatenated-index steps, so they are
+    exact only when consecutive files are consecutive months.
+    `hist_duration_days` must be a multiple of `hist_freq_days`.
+    Source data is 3-hourly (SAMPLES_PER_DAY=8 steps/day).
     """
     SAMPLES_PER_DAY = 8
 

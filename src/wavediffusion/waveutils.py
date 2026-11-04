@@ -286,6 +286,28 @@ def evaluate(
     val_loss_tensor = torch.tensor(total_loss / count, device=next(model.parameters()).device)
     return val_loss_tensor
 
+def _save_sample_plots(x, x0, f, mask, test, path, filename, OPTION=1):
+    ''' Invert normalization of truth x and prediction x0 (normalized space,
+        batch-first) and save one comparison figure per sample, named
+        path + filename + "_{i}.png" (or "_parts_{i}" / "_crossing_{i}" for OPTION 3).
+        Maps are flipped north-up and rolled by half the width to centre them on
+        the Pacific (the grids run from -180 deg). '''
+    pacific = lambda a: np.roll(a.cpu().numpy()[..., ::-1, :], a.shape[-1] // 2, axis=-1)
+    for i in range(x0.shape[0]):
+        x0_ = test.invert_x(x0[i]) * tf.Resize((320,720))(mask[i].to(x0))
+        x_  = test.invert_x(x[i])  * tf.Resize((320,720))(mask[i].to(x))
+        f_  = test.invert_f(f[i])
+        if OPTION == 3:
+            fig1 = plot_sample_parts(pacific(x_), pacific(x0_))
+            fig1.savefig(path + filename + f"_parts_{i}.png")
+            fig2 = plot_crossing_frac(pacific(x_), pacific(x0_))
+            fig2.savefig(path + filename + f"_crossing_{i}.png")
+            plt.close(fig1); plt.close(fig2)
+        elif OPTION == 1 or 2:
+            fig = plot_sample(pacific(x_), pacific(x0_.unsqueeze(0)), pacific(f_), OPTION=OPTION)
+            fig.savefig(path + filename + f"_{i}.png")
+            plt.close(fig)
+
 @torch.no_grad()
 def sample_and_save(
     model,
@@ -298,7 +320,7 @@ def sample_and_save(
     test, # test dataset for inverting normalization
     filename="sample",
     OPTION=1, # 1,2,3
-    ):   
+    ):
 
     loader_iter = iter(loader)
     with ema.average_parameters():
@@ -307,64 +329,37 @@ def sample_and_save(
         f = f.to(accelerator.device)
         mask = mask.to(accelerator.device)
         *xt, x0 = samples(
-            model, schedule.sample_sigmas(40), gam=1, mu=0.5, batchsize=sample_batch_size, 
+            model, schedule.sample_sigmas(40), gam=1, mu=0.5, batchsize=sample_batch_size,
             accelerator=accelerator, cond=f, mask=mask,
         )
+        _save_sample_plots(x, x0, f, mask, test, path, filename, OPTION=OPTION)
 
-        for i in range(sample_batch_size):
-            x0_ = test.invert_x(x0[i]) * tf.Resize((320,720))(mask[i].to(x0))
-            x_  = test.invert_x(x[i])  * tf.Resize((320,720))(mask[i].to(x))
-            f_  = test.invert_f(f[i])
-            if OPTION == 3:
-                fig1 = plot_sample_parts(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.cpu().numpy()[:, ::-1],
-                )
-                fig1.savefig(path + filename + f"_parts_{i}.png")
-                fig2 = plot_crossing_frac(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.cpu().numpy()[:, ::-1],
-                )
-                fig2.savefig(path + filename + f"_crossing_{i}.png")
-                plt.close(fig1); plt.close(fig2)
-            elif OPTION == 1 or 2:
-                fig = plot_sample(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.unsqueeze(0).cpu().numpy()[:, :, ::-1],
-                    f_.cpu().numpy()[:, ::-1],
-                    OPTION=OPTION
-                )
-                fig.savefig(path + filename + f"_{i}.png")
-                plt.close(fig)
-            
         # One step sampling for conditional mean
         sigma0 = schedule.sample_sigmas(40)[0].to(accelerator.device)
         xt = model.rand_input(sample_batch_size).to(accelerator.device) * sigma0 * mask.to(accelerator.device)
         eps = model.predict_eps_cfg(xt, sigma0, cond=f, cfg_scale=0) * mask.to(accelerator.device)
         x0 = xt - eps * sigma0
-        for i in range(0, sample_batch_size):
-            x0_ = test.invert_x(x0[i]) * tf.Resize((320,720))(mask[i].to(x0))
-            x_  = test.invert_x(x[i])  * tf.Resize((320,720))(mask[i].to(x))
-            f_  = test.invert_f(f[i])            
-            if OPTION == 3:
-                fig1 = plot_sample_parts(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.cpu().numpy()[:, ::-1],
-                )
-                fig1.savefig(path + filename + f"_onestep_parts_{i}.png")
-                fig2 = plot_crossing_frac(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.cpu().numpy()[:, ::-1],
-                )
-                fig2.savefig(path + filename + f"_onestep_crossing_{i}.png")
-                plt.close(fig1); plt.close(fig2)
-            elif OPTION == 1 or 2:
-                fig = plot_sample(
-                    x_.cpu().numpy()[:, ::-1],
-                    x0_.unsqueeze(0).cpu().numpy()[:, :, ::-1],
-                    f_.cpu().numpy()[:, ::-1],
-                    OPTION=OPTION
-                )
-                fig.savefig(path + filename + f"_onestep_{i}.png")
-                plt.close(fig)
+        _save_sample_plots(x, x0, f, mask, test, path, filename + "_onestep", OPTION=OPTION)
 
+@torch.no_grad()
+def predict_and_save(
+    model,
+    ema,
+    loader,
+    accelerator,
+    path,
+    test, # test dataset for inverting normalization
+    filename="sample",
+    OPTION=1, # 1,2,3
+    ):
+    ''' Deterministic counterpart of sample_and_save: one forward pass
+        model(cond) on a test batch with EMA weights, saving the same plots. '''
+    model.eval()
+    with ema.average_parameters():
+        x, f, mask = next(iter(loader))
+        x = x.to(accelerator.device)
+        f = f.to(accelerator.device)
+        mask = mask.to(accelerator.device)
+        x0 = model(f) * mask
+        _save_sample_plots(x, x0, f, mask, test, path, filename, OPTION=OPTION)
+    model.train()

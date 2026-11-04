@@ -6,6 +6,8 @@ from wavediffusion.wavedata import npyDataResized, npyDataWndHist
 from torch.utils.data import DataLoader
 from torch_ema import ExponentialMovingAverage as EMA
 from wavediffusion.diffusion import ScheduleLogLinear, ScheduleDDPM, samples, samples_thres
+from wavediffusion.timeindex import (hist_window, months_file_list, build_date_index, select_sample_indices,
+                                     write_dates_csv, to_dataset_idx)
 from accelerate import Accelerator
 import contextlib
 import torch
@@ -19,10 +21,22 @@ from tqdm import tqdm
 OPTION = 1
 label = '_periodic'
 HIST = True
+# Wind-history window; must match how the checkpoint was trained (it sets the
+# number of history channels, precond_ch = 4 + 2 * n_hist). Also sets how far
+# back the extra month loaded before the first test month must reach.
+HIST_DURATION_DAYS = 5
+HIST_FREQ_DAYS = 1
 MONTHLY = True
 test_year = 2004
 test_month = 4
 every_n = 8
+# Optionally pick the dates instead of striding: SAMPLE_DAYS are days of every
+# test month (days past a month's end are skipped), at SAMPLE_HOUR (UTC, multiple
+# of 3), e.g. SAMPLE_DAYS = [1, 8, 15, 22]. None = every every_n steps from the
+# first date with a full history window. Output files are named by dataset index;
+# the index -> date mapping is saved to {save_path}dates.csv.
+SAMPLE_DAYS = None
+SAMPLE_HOUR = 0
 
 # OPTION = 2
 # label = '_nohist'
@@ -69,31 +83,23 @@ os.makedirs(save_path, exist_ok=True)
 # os.makedirs(save_path, exist_ok=True)
 
 if OPTION == 1:
-    var_names = ['hs', 'tp', 'thetap']
+    var_names = ['hs', 'tm', 'thetam']
 elif OPTION == 2:
     var_names = ['hs', 'uss', 'vss', 'mssd', 'mssc']
 elif OPTION == 3:
     var_names = ['hs_p1', 'tp_p1', 'thetap_p1', 'hs_p2', 'tp_p2', 'thetap_p2', 'ci']
 
 ############## Define testing data ################
+forcing_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
 if OPTION == 1 or OPTION == 2:
-    test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    # test_file_names = [*( (f'wave_2004{i:02d}', f'forcing_2004{i:02d}') for i in range(1, 13) )]
-    if MONTHLY:
-        test_file_names = [(f'wavemean_{test_year}{test_month:02d}', f'forcing_{test_year}{test_month:02d}')]
-    else:
-        test_file_names = [(f'wavemean_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}') for month in range(1, 13)]
-    test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
-                       os.path.join(test_file_path, f'{f}.npy')) for x, f in test_file_names]
+    test_file_path, x_prefix = forcing_file_path, 'wavemean'
 elif OPTION == 3:
-    test_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/'
-    forcing_file_path = '/global/homes/j/jiarongw/scratch_folder/wave_data/mean_global/'
-    if MONTHLY:
-        test_file_names = [(f'waveparts_{test_year}{test_month:02d}', f'forcing_{test_year}{test_month:02d}')]
-    else:
-        test_file_names = [(f'waveparts_{test_year}{month:02d}', f'forcing_{test_year}{month:02d}') for month in range(1, 13)]
-    test_file_list = [(os.path.join(test_file_path, f'{x}.npy'), 
-                       os.path.join(forcing_file_path, f'{f}.npy')) for x, f in test_file_names]
+    test_file_path, x_prefix = '/global/homes/j/jiarongw/scratch_folder/wave_data/partition_global/', 'waveparts'
+test_months = [(test_year, test_month)] if MONTHLY else [(test_year, month) for month in range(1, 13)]
+# With wind history, the month before the first test month is loaded too, only so
+# the first test days have a full history window; nothing in it is sampled.
+test_file_list, load_months = months_file_list(test_months, test_file_path, forcing_file_path,
+                                               x_prefix=x_prefix, prepend_previous=HIST)
 stats_file = os.path.join(test_file_path, f'stats_OPTION{OPTION}.npz')
 stats = np.load(stats_file)
 meanx, stdx = stats['meanx'], stats['stdx']
@@ -105,7 +111,7 @@ if HIST:
         landmaskname=os.path.join(test_file_path, 'mask.npy'),
         use_icymask=True, compute_stats=False,
         meanx=meanx, stdx=stdx, meanf=meanf, stdf=stdf,
-        OPTION=OPTION
+        OPTION=OPTION, hist_duration_days=HIST_DURATION_DAYS, hist_freq_days=HIST_FREQ_DAYS
     )
 else:
     test = npyDataResized(
@@ -123,21 +129,22 @@ GUIDED = False # If apply guidance during sampling
 USING_PRE = False # If using previous mean as initialization for sampling
 
 weights_file = model_path + f'ckpt_{epoch}.pt'
+precond_ch = 4 + 2 * hist_window(HIST_DURATION_DAYS, HIST_FREQ_DAYS)[0] if HIST else 4    # base forcing + (u, v) per snapshot
 if OPTION == 1:
-    model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=14,
+    model = Scaled(myUnet)(in_dim=320, in_ch=3, out_ch=3, ch=256, precond_ch=precond_ch,
                        scale=(test.meanx, test.stdx, test.meanf, test.stdf),
                        ch_mult=(1, 2, 2), attn_resolutions=(16,), periodic=True)
 elif OPTION == 2:
     if HIST:
-        model = Scaled(myUnet)(in_dim=320, in_ch=5, out_ch=5, ch=256, precond_ch=14, 
+        model = Scaled(myUnet)(in_dim=320, in_ch=5, out_ch=5, ch=256, precond_ch=precond_ch, 
                            scale=(test.meanx, test.stdx, test.meanf, test.stdf),
                            ch_mult=(1, 2, 2), attn_resolutions=(16,))
     else:   
-        model = Scaled(myUnet)(in_dim=320, in_ch=5, out_ch=5, ch=256, precond_ch=4, 
+        model = Scaled(myUnet)(in_dim=320, in_ch=5, out_ch=5, ch=256, precond_ch=precond_ch, 
                         scale=(test.meanx, test.stdx, test.meanf, test.stdf),
                         ch_mult=(1, 2, 2), attn_resolutions=(16,))
 elif OPTION == 3:
-    model = Scaled(myUnet)(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=14, 
+    model = Scaled(myUnet)(in_dim=320, in_ch=7, out_ch=7, ch=256, precond_ch=precond_ch, 
                        scale=(test.meanx, test.stdx, test.meanf, test.stdf),
                        ch_mult=(1, 2, 2), attn_resolutions=(16,))
 
@@ -215,13 +222,20 @@ def weighted_meanvar(std, mask, w):
     var = std ** 2
     return np.sum(var[mask] * w[mask]) / np.sum(w[mask])    
 
+############ Sampling indices and their dates ############
+padding = getattr(test, 'padding', 0)    # history window; 0 without wind history
+dates, _ = build_date_index(load_months, test.file_lengths)
+raw_indices = select_sample_indices(dates, padding, every_n, SAMPLE_DAYS, SAMPLE_HOUR, keep_months=test_months)
+indices = [to_dataset_idx(r, padding) for r in raw_indices]
+write_dates_csv(f'{save_path}dates.csv', raw_indices, dates, padding)
+
 x_truth, mean, std = None, None, None
-for index in tqdm(range(0, test.__len__(), every_n)):
+for index in tqdm(indices):
 # for index in tqdm(range(0, 96, 8)):
     print(f'Sampling for index {index}...')
     x, f, icymask = test.__getitem__(index)
     x = x.unsqueeze(0); f = f.unsqueeze(0); icymask = icymask.unsqueeze(0)
-    if index == 0:
+    if index == indices[0]:
         x_truth, x_mean, std, rsample = sample (f, x, icymask, xt=None, n_ensem=n_ensem)
     else:
         if USING_PRE:

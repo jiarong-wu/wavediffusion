@@ -90,6 +90,87 @@ def PredX0(cls: ModelMixin):
     return type(cls.__name__ + 'PredX0', (cls,),
                 dict(get_loss=get_loss, predict_eps=predict_eps, get_loss_masked=get_loss_masked))
 
+# Weight the eps-prediction loss per sample by w(sigma) (no new parameters, so the
+# state_dict stays that of cls). An x0 error b at noise sigma costs (b/sigma)^2 in the
+# plain eps loss; w(sigma) = 1 + sigma^2 / sigma_data^2 (EDM's loss weight, written for
+# eps-prediction) makes that ~b^2 / sigma_data^2 at large sigma instead, i.e. the x0
+# error counts about equally at all high noise levels. w_max caps it to bound the
+# gradient variance from the few very-high-sigma draws of ScheduleDDPM (up to ~157).
+def SigmaWeighted(cls: ModelMixin, sigma_data=1.0, w_max=100.0):
+    def weight(sigma):
+        return torch.clamp(1 + sigma.flatten() ** 2 / sigma_data ** 2, max=w_max)
+    def get_loss(self, x0, sigma, eps, cond=None, loss=None):
+        se = (eps - self(x0 + sigma * eps, sigma, cond=cond)) ** 2
+        return (weight(sigma) * se.flatten(1).mean(1)).mean()
+    def get_loss_masked(self, x0, sigma, eps, cond=None, mask=None, loss=None):
+        se = (eps - self(x0 + sigma * eps, sigma, cond=cond) * mask) ** 2    # eps is masked by the loop
+        return (weight(sigma) * se.flatten(1).mean(1)).mean()
+    return type(cls.__name__ + 'SigmaWeighted', (cls,),
+                dict(get_loss=get_loss, get_loss_masked=get_loss_masked))
+
+# Diffuse the residual from a frozen deterministic model instead of the field itself
+class ResidualDiffusion(ModelMixin, nn.Module):
+    ''' Diffusion on r = (x - x_det) / rstd, where x_det = det(f) is a frozen
+        deterministic forecast (e.g. DetUnet) in the same normalized space as x,
+        and rstd is the per-channel std of x - x_det. The large-scale level comes
+        from det; `net` (e.g. Scaled(myUnet) with precond_ch = forcing channels +
+        x channels) only learns the variability around it, conditioned on
+        cat(f, x_det). Channels in `circular` (degrees once de-normalized) get
+        their residual wrapped to [-180, 180) degrees.
+        Drop-in for masked_training_loop / evaluate: they pass (x0, f) and
+        get_loss_masked turns them into (r, cat(f, x_det)). For sampling, use
+        sample(), which returns fields in x's normalized space. '''
+    def __init__(self, net, det, rstd, stdx, circular=()):
+        super().__init__()
+        self.net, self.det = net, det
+        self.input_dims = net.input_dims
+        self.circular = list(circular)
+        for p in self.det.parameters():
+            p.requires_grad_(False)
+        shape = (1, -1, 1, 1)
+        self.register_buffer('rstd', torch.as_tensor(rstd, dtype=torch.float32).reshape(shape))
+        self.register_buffer('stdx_res', torch.as_tensor(stdx, dtype=torch.float32).reshape(shape))
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.det.eval()    # frozen: never in training mode (dropout)
+        return self
+
+    def forward(self, x, sigma, cond=None):    # cond = cat(f, x_det), see make_cond
+        return self.net(x, sigma, cond=cond)
+
+    @torch.no_grad()
+    def make_cond(self, f):
+        x_det = self.det(f)
+        return torch.cat([f, x_det], dim=1), x_det
+
+    def raw_residual(self, x, x_det):
+        d = x - x_det
+        if self.circular:
+            c, s = self.circular, self.stdx_res[:, self.circular]
+            d[:, c] = (torch.remainder(d[:, c] * s + 180, 360) - 180) / s
+        return d
+
+    def to_residual(self, x, x_det):
+        return self.raw_residual(x, x_det) / self.rstd
+
+    def from_residual(self, r, x_det):
+        return x_det + r * self.rstd
+
+    def get_loss_masked(self, x0, sigma, eps, cond=None, mask=None, loss=nn.MSELoss):
+        cond, x_det = self.make_cond(cond)
+        r = self.to_residual(x0, x_det) * mask    # land / ice at 0, like the masked noise
+        return loss()(eps, self(r + sigma * eps, sigma, cond=cond) * mask)
+
+    @torch.no_grad()
+    def sample(self, f, mask, sigmas, gam=1, mu=0.5, accelerator=None):
+        ''' One sample per row of f: (x, x_det), both in x's normalized space. '''
+        from .diffusion import samples
+        cond, x_det = self.make_cond(f)
+        *_, r = samples(self, sigmas, gam=gam, mu=mu, batchsize=f.shape[0],
+                        accelerator=accelerator, cond=cond, mask=mask)
+        return self.from_residual(r, x_det), x_det
+
 ## Common functions for other models
 
 class CondSequential(nn.Sequential):
